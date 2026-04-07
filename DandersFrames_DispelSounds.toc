@@ -1,0 +1,13 @@
+## Interface: 120001
+## Title: DandersFrames_DispelSounds
+## Notes: Plays a sound when DandersFrames shows a dispel overlay on party or raid members
+## Author: Numbtongue
+## Version: 1.0.0-beta1
+## SavedVariables: DispelSoundAlertDB
+## Dependencies: DandersFrames
+## OptionalDeps: LibSharedMedia-3.0
+## IconTexture: Interface\Icons\Spell_Holy_DispelMagic
+## Category: Buffs & Debuffs
+
+Core.lua
+Options.lua
