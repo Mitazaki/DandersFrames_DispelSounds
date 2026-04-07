@@ -21,7 +21,7 @@ local NONE_SOUND_LABEL = "None"
 local ADDON_DISPLAY_NAME = "DandersFrames_DispelSounds"
 local ADDON_VERSION = "1.0.0-beta1"
 
--- Color palette (BuffReminders-style)
+-- Color palette
 local Colors = {
     panelBg       = { 0.08, 0.08, 0.08, 0.95 },
     panelBorder   = { 0.25, 0.25, 0.25, 1 },
