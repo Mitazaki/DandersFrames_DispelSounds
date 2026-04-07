@@ -1,6 +1,5 @@
 -- ============================================================================
 -- DandersFrames_DispelSounds - Options Panel
--- BuffReminders-style dark flat UI
 -- ============================================================================
 
 local addonName, DSA = ...
