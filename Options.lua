@@ -902,6 +902,13 @@ local function CreateOptionsPanel()
         tooltip = "In 'Dispellable by Me' mode, also check for any dispellable debuff on yourself that could be removed by racial abilities (e.g. Dwarf Stoneform, Dark Iron Fireblood).",
     }))
 
+    PlaceWidget(CreateCheckbox(content, {
+        label = "Only alert when ability is ready",
+        get = function() return db.onlyWhenReady end,
+        set = function(v) db.onlyWhenReady = v end,
+        tooltip = "Only play the alert sound when your dispel ability (or racial) is off cooldown. Ignores the GCD (1.5s or less). Checks both spec dispel spells and racial spells.",
+    }))
+
     -- Auto-detect status display
     local autoStatusText = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     autoStatusText:SetWidth(PANEL_WIDTH - COL_PADDING * 2)
