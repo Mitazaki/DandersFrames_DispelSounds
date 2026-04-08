@@ -887,7 +887,7 @@ local function CreateOptionsPanel()
         label = "Only alert when ability is ready",
         get = function() return db.onlyWhenReady end,
         set = function(v) db.onlyWhenReady = v end,
-        tooltip = "Only play the spec dispel alert when your class/spec ability is off cooldown. Does not affect racial alerts — racial cooldown is always checked automatically.",
+        tooltip = "Only play the spec dispel alert when your class/spec ability is off cooldown. Does not affect racial alerts — racial cooldown cannot be tracked in combat.",
     }))
 
     -- Auto-detect status display

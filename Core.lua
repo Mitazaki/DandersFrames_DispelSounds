@@ -222,11 +222,6 @@ local function IsAnyDispelSpellReady()
     return false
 end
 
-local function IsRacialDispelReady()
-    if not autoRacialSpellID then return false end
-    return IsSpellReady(autoRacialSpellID)
-end
-
 -- ============================================================================
 -- AUTO-DETECT
 -- ============================================================================
@@ -366,17 +361,15 @@ local function ScanUnitForDispellableDebuffs(unit)
 
         -- For the player unit: also check racial self-dispel
         -- Racials can remove types the spec cannot (e.g. bleeds for Dwarves)
-        -- Racial cooldown is always checked directly (trackable via Blizzard API)
+        -- No cooldown check — racial CD can't be read in combat
         if isPlayer and autoRacialSpellID then
-            if IsRacialDispelReady() then
-                for i = 1, 40 do
-                    local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
-                    if not auraData then break end
+            for i = 1, 40 do
+                local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
+                if not auraData then break end
 
-                    if auraData.dispelName ~= nil then
-                        DebugPrint("|cff88ff88Scan " .. unit .. ":|r racial-dispellable aura on self")
-                        return "racial"
-                    end
+                if auraData.dispelName ~= nil then
+                    DebugPrint("|cff88ff88Scan " .. unit .. ":|r racial-dispellable aura on self")
+                    return "racial"
                 end
             end
         end
@@ -858,7 +851,7 @@ SlashCmdList["DISPELSOUNDALERT"] = function(msg)
             print("  Detected types: " .. (#types > 0 and table.concat(types, ", ") or "(none - no spec?)"))
             print("  Dispel ready: " .. (IsAnyDispelSpellReady() and "|cff00ff00YES|r" or "|cffff0000NO|r"))
             if autoRacialSpellID then
-                print("  Racial ready: " .. (IsRacialDispelReady() and "|cff00ff00YES|r" or "|cffff0000NO|r"))
+                print("  Racial: detected (cooldown not trackable in combat)")
             end
         else
             print("  All Dispellable mode: alerts for any dispellable debuff")
@@ -1087,7 +1080,6 @@ DSA.GetLSM = GetLSM
 DSA.StopAllRepeats = StopAllRepeats
 DSA.IsDispelTypeEnabled = IsDispelTypeEnabled
 DSA.IsAnyDispelSpellReady = IsAnyDispelSpellReady
-DSA.IsRacialDispelReady = IsRacialDispelReady
 DSA.CLASS_SPEC_DISPELS = CLASS_SPEC_DISPELS
 DSA.CLASS_SPEC_DISPEL_SPELLS = CLASS_SPEC_DISPEL_SPELLS
 DSA.RACIAL_DISPELS = RACIAL_DISPELS
