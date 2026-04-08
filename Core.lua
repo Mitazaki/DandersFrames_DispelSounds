@@ -168,11 +168,7 @@ end
 local function IsSpellReady(spellID)
     if not spellID then return false end
 
-    -- Check if the player knows this spell
-    if not IsSpellKnown(spellID) then
-        return false
-    end
-
+    -- Try C_Spell.GetSpellCooldown first — works in combat, returns nil if spell unknown
     local cooldownInfo = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(spellID)
     if cooldownInfo then
         if cooldownInfo.duration == 0 then
@@ -190,18 +186,26 @@ local function IsSpellReady(spellID)
         return false
     end
 
-    -- Fallback to old API
-    local start, duration = GetSpellCooldown(spellID)
-    if start and duration then
-        if duration == 0 then return true end
-        local remaining = (start + duration) - GetTime()
-        if remaining <= 0 then return true end
-        if duration <= 1.5 then return true end
-        DebugPrint("|cffff8888Cooldown:|r spell " .. spellID .. " on CD (" .. string.format("%.1f", remaining) .. "s remaining)")
-        return false
+    -- Fallback to old API (pre-11.0)
+    if GetSpellCooldown then
+        local start, duration = GetSpellCooldown(spellID)
+        if start and duration then
+            if duration == 0 then return true end
+            local remaining = (start + duration) - GetTime()
+            if remaining <= 0 then return true end
+            if duration <= 1.5 then return true end
+            DebugPrint("|cffff8888Cooldown:|r spell " .. spellID .. " on CD (" .. string.format("%.1f", remaining) .. "s remaining)")
+            return false
+        end
     end
 
-    return true
+    -- Neither API returned data — check if player even has this spell
+    if IsPlayerSpell and IsPlayerSpell(spellID) then
+        return true  -- Has the spell, assume ready (API might not be available yet)
+    end
+
+    DebugPrint("|cffff8888Cooldown:|r spell " .. spellID .. " not found via any API")
+    return false
 end
 
 local function IsAnyDispelSpellReady()
@@ -753,7 +757,9 @@ SlashCmdList["DISPELSOUNDALERT"] = function(msg)
             print("  Auto-detected types: " .. (#types > 0 and table.concat(types, ", ") or "(none)"))
             local spells = {}
             for _, sid in ipairs(autoDispelSpells) do
-                local ready = IsSpellReady(sid) and "|cff00ff00READY|r" or "|cffff0000ON CD|r"
+                local ready = IsSpellReady(sid) and "|cff00ff00READY|r" or "|cffff0000NOT READY|r"
+                local known = (IsPlayerSpell and IsPlayerSpell(sid)) and "known" or "unknown"
+                spells[#spells + 1] = tostring(sid) .. " (" .. ready .. ", " .. known .. ")"
                 spells[#spells + 1] = tostring(sid) .. " (" .. ready .. ")"
             end
             if #spells > 0 then
