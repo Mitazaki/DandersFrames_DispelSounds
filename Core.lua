@@ -17,9 +17,9 @@ local DEFAULTS = {
     enableRaid = true,
     enablePlayer = true,
     filterMode = "auto",
-    includeRacials = true,
     onlyWhenReady = true,
     soundFile = nil,
+    racialSoundFile = nil,
     soundChannel = "Master",
     cooldownPerUnit = 3,
     globalCooldown = 0.5,
@@ -144,7 +144,6 @@ local repeatTimers = {}
 local LSM
 
 local autoDispelTypes = {}
-local autoRacialTypes = {}
 local autoDispelSpells = {}
 local autoRacialSpellID = nil
 local autoDetectDirty = true
@@ -234,7 +233,6 @@ end
 
 local function UpdateAutoDetect()
     wipe(autoDispelTypes)
-    wipe(autoRacialTypes)
     wipe(autoDispelSpells)
     autoRacialSpellID = nil
 
@@ -261,16 +259,10 @@ local function UpdateAutoDetect()
         end
     end
 
-    -- Always detect racial info (even if includeRacials is off, we need to know for filtering)
+    -- Detect racial spell for self-dispel (Stoneform, Fireblood)
     local _, raceFile = UnitRace("player")
     if raceFile and RACIAL_DISPELS[raceFile] then
-        local racialInfo = RACIAL_DISPELS[raceFile]
-        autoRacialSpellID = racialInfo.spellID
-        if db and db.includeRacials then
-            for _, t in ipairs(racialInfo.types) do
-                autoRacialTypes[t] = true
-            end
-        end
+        autoRacialSpellID = RACIAL_DISPELS[raceFile].spellID
     end
 
     autoDetectDirty = false
@@ -282,11 +274,6 @@ local function UpdateAutoDetect()
         local spells = {}
         for _, sid in ipairs(autoDispelSpells) do spells[#spells + 1] = tostring(sid) end
         DebugPrint("|cff88ff88Auto-detect:|r dispel spells = {" .. table.concat(spells, ", ") .. "}")
-        local rt = {}
-        for t in pairs(autoRacialTypes) do rt[#rt + 1] = t end
-        if #rt > 0 then
-            DebugPrint("|cff88ff88Auto-detect:|r racial (self) = {" .. table.concat(rt, ", ") .. "}")
-        end
         if autoRacialSpellID then
             DebugPrint("|cff88ff88Auto-detect:|r racial spell = " .. autoRacialSpellID)
         end
@@ -300,9 +287,9 @@ function DSA.GetAutoDetectedTypes()
     return autoDispelTypes
 end
 
-function DSA.GetAutoRacialTypes()
+function DSA.HasRacialDispel()
     if autoDetectDirty then UpdateAutoDetect() end
-    return autoRacialTypes
+    return autoRacialSpellID ~= nil
 end
 
 function DSA.MarkAutoDetectDirty()
@@ -319,27 +306,17 @@ local function IsDispelTypeEnabled(dispelType, unit)
     if db.filterMode == "auto" then
         if autoDetectDirty then UpdateAutoDetect() end
         if autoDispelTypes[dispelType] then return true end
-        if unit and UnitIsUnit(unit, "player") and autoRacialTypes[dispelType] then
-            return true
-        end
         return false
     else
-        -- "all" mode: any dispellable aura triggers
         return true
     end
 end
 
 -- ============================================================================
 -- AURA SCANNING
--- Combat-safe: aura fields (dispelName, dispelType, etc.) are secret values
--- in WoW and cannot be used as table indices or compared to strings.
--- We use C_UnitAuras.IsAuraFilteredOut with RAID_PLAYER_DISPELLABLE (auto)
--- or nil-checks on dispelName (all mode) which are secret-safe.
---
--- IMPORTANT: RAID_PLAYER_DISPELLABLE may include racial abilities (e.g.
--- Stoneform for Dwarves). When includeRacials is off, we use a two-pass
--- approach: first check RAID_PLAYER_DISPELLABLE, then verify via
--- canActivePlayerDispel to exclude racial-only matches.
+-- Returns: "spec", "racial", or false
+-- "spec" = dispellable by class/spec ability (or any in "all" mode)
+-- "racial" = player unit has a dispellable debuff and racial is ready
 -- ============================================================================
 
 local FILTER_PLAYER_DISPELLABLE = "HARMFUL|RAID_PLAYER_DISPELLABLE"
@@ -355,99 +332,61 @@ local function ScanUnitForDispellableDebuffs(unit)
         local isPlayer = UnitIsUnit(unit, "player")
         local checkCooldowns = db.onlyWhenReady
         local hasDispelSpells = #autoDispelSpells > 0
-        local hasRacials = autoRacialSpellID ~= nil and db.includeRacials
 
-        -- Check cooldowns upfront if enabled
+        -- Check spec cooldown upfront
         local specDispelReady = true
-        local racialDispelReady = true
-        if checkCooldowns then
-            if hasDispelSpells then
-                specDispelReady = IsAnyDispelSpellReady()
+        if checkCooldowns and hasDispelSpells then
+            specDispelReady = IsAnyDispelSpellReady()
+        end
+
+        -- Spec dispel check via RAID_PLAYER_DISPELLABLE
+        if specDispelReady and IsAuraFilteredOut then
+            for i = 1, 40 do
+                local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
+                if not auraData then break end
+
+                local id = auraData.auraInstanceID
+                if id and not IsAuraFilteredOut(unit, id, FILTER_PLAYER_DISPELLABLE) then
+                    DebugPrint("|cff88ff88Scan " .. unit .. ":|r spec-dispellable aura (id=" .. id .. ")")
+                    return "spec"
+                end
             end
-            if hasRacials and isPlayer then
-                racialDispelReady = IsRacialDispelReady()
-            end
-            -- If nothing is ready, no point scanning
-            if not specDispelReady and (not isPlayer or not racialDispelReady) then
-                DebugPrint("|cffff8888Scan " .. unit .. ":|r all dispel abilities on cooldown")
-                return false
+        elseif specDispelReady and next(autoDispelTypes) ~= nil then
+            -- Fallback if IsAuraFilteredOut unavailable
+            for i = 1, 40 do
+                local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
+                if not auraData then break end
+
+                if auraData.dispelName ~= nil then
+                    DebugPrint("|cff88ff88Scan " .. unit .. ":|r dispellable aura found (fallback)")
+                    return "spec"
+                end
             end
         end
 
-        if IsAuraFilteredOut then
-            -- RAID_PLAYER_DISPELLABLE scan (may include racial results)
-            local foundViaFilter = false
-            if specDispelReady then
-                for i = 1, 40 do
-                    local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
-                    if not auraData then break end
-
-                    local id = auraData.auraInstanceID
-                    if id and not IsAuraFilteredOut(unit, id, FILTER_PLAYER_DISPELLABLE) then
-                        -- If includeRacials is off and this is the player unit,
-                        -- we need to verify this isn't a racial-only dispellable debuff.
-                        -- canActivePlayerDispel == true means spec can handle it.
-                        -- If canActivePlayerDispel is nil/false but filter passes,
-                        -- it may be a racial-only match.
-                        if not db.includeRacials and isPlayer then
-                            -- canActivePlayerDispel is also a secret value, but
-                            -- nil-check is safe: if it's non-nil, the spec can dispel it
-                            if auraData.canApplyAura ~= nil or auraData.isStealable ~= nil then
-                                -- These don't help. We can't reliably distinguish
-                                -- spec vs racial via secret values.
-                                -- Fallback: check if our spec has ANY dispel types
-                                -- If spec has no dispel types at all, skip
-                                if next(autoDispelTypes) ~= nil then
-                                    DebugPrint("|cff88ff88Scan " .. unit .. ":|r player-dispellable aura (id=" .. id .. "), spec has dispels")
-                                    foundViaFilter = true
-                                    break
-                                else
-                                    DebugPrint("|cffff8888Scan " .. unit .. ":|r skipping aura (id=" .. id .. "), spec has no dispels, likely racial only")
-                                end
-                            else
-                                if next(autoDispelTypes) ~= nil then
-                                    foundViaFilter = true
-                                    break
-                                end
-                            end
-                        else
-                            DebugPrint("|cff88ff88Scan " .. unit .. ":|r player-dispellable aura (id=" .. id .. ")")
-                            foundViaFilter = true
-                            break
-                        end
-                    end
-                end
+        -- For the player unit: also check racial self-dispel
+        -- Racials can remove types the spec cannot (e.g. bleeds for Dwarves)
+        if isPlayer and autoRacialSpellID then
+            local racialReady = true
+            if checkCooldowns then
+                racialReady = IsRacialDispelReady()
             end
 
-            if foundViaFilter then
-                return true
-            end
-
-            -- Racial self-dispel check (separate from RAID_PLAYER_DISPELLABLE)
-            if hasRacials and isPlayer and racialDispelReady then
+            if racialReady then
                 for i = 1, 40 do
                     local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
                     if not auraData then break end
 
                     if auraData.dispelName ~= nil then
                         DebugPrint("|cff88ff88Scan " .. unit .. ":|r racial-dispellable aura on self")
-                        return true
+                        return "racial"
                     end
                 end
             end
-        else
-            -- Fallback if IsAuraFilteredOut unavailable
-            if specDispelReady and next(autoDispelTypes) ~= nil then
-                for i = 1, 40 do
-                    local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
-                    if not auraData then break end
+        end
 
-                    if auraData.dispelName ~= nil then
-                        DebugPrint("|cff88ff88Scan " .. unit .. ":|r dispellable aura found (fallback)")
-                        return true
-                    end
-                end
-            end
+        if not specDispelReady then
+            DebugPrint("|cffff8888Scan " .. unit .. ":|r spec dispel on cooldown")
         end
 
         return false
@@ -459,7 +398,7 @@ local function ScanUnitForDispellableDebuffs(unit)
 
             if auraData.dispelName ~= nil then
                 DebugPrint("|cff88ff88Scan " .. unit .. ":|r dispellable aura found (all mode)")
-                return true
+                return "spec"
             end
         end
 
@@ -558,7 +497,23 @@ local function PlayDispelSound(force)
     return ok
 end
 
-local function PlayForUnit(unit)
+local function PlayRacialSound(force)
+    local now = GetTime()
+
+    if not force and now - lastGlobalSound < db.globalCooldown then
+        DebugPrint("|cffff8888PlayRacialSound:|r blocked by global cooldown")
+        return false
+    end
+
+    -- Use racial sound if set, otherwise fall back to main sound
+    local settingKey = (db.racialSoundFile and db.racialSoundFile ~= "") and "racialSoundFile" or "soundFile"
+    local soundType, soundValue = ResolveSoundFile(settingKey)
+    local ok = DoPlaySound(soundType, soundValue, db.soundChannel or "Master")
+    lastGlobalSound = now
+    return ok
+end
+
+local function PlayForUnit(unit, scanResult)
     if not db.enabled then return end
 
     local guid = UnitGUID(unit)
@@ -570,8 +525,16 @@ local function PlayForUnit(unit)
         return
     end
 
-    DebugPrint("|cff88ff88PlayForUnit(" .. unit .. "):|r playing sound")
-    if PlayDispelSound() then
+    local ok
+    if scanResult == "racial" then
+        DebugPrint("|cff88ff88PlayForUnit(" .. unit .. "):|r playing racial sound")
+        ok = PlayRacialSound()
+    else
+        DebugPrint("|cff88ff88PlayForUnit(" .. unit .. "):|r playing sound")
+        ok = PlayDispelSound()
+    end
+
+    if ok then
         unitCooldowns[guid] = now
     end
 end
@@ -612,13 +575,14 @@ local function StartRepeat(unit)
             return
         end
 
-        if not ScanUnitForDispellableDebuffs(capturedUnit) then
+        local scanResult = ScanUnitForDispellableDebuffs(capturedUnit)
+        if not scanResult then
             StopRepeat(guid)
             dispelState[guid] = false
             return
         end
 
-        PlayForUnit(capturedUnit)
+        PlayForUnit(capturedUnit, scanResult)
     end)
 end
 
@@ -633,14 +597,14 @@ local function ProcessUnit(unit)
     local guid = UnitGUID(unit)
     if not guid then return end
 
-    local hasDispellable = ScanUnitForDispellableDebuffs(unit)
+    local scanResult = ScanUnitForDispellableDebuffs(unit)
 
-    if hasDispellable and not dispelState[guid] then
-        DebugPrint("|cff00ff00ALERT|r " .. unit .. ": dispellable debuff detected")
+    if scanResult and not dispelState[guid] then
+        DebugPrint("|cff00ff00ALERT|r " .. unit .. ": dispellable debuff detected (" .. scanResult .. ")")
         dispelState[guid] = true
-        PlayForUnit(unit)
+        PlayForUnit(unit, scanResult)
         StartRepeat(unit)
-    elseif not hasDispellable and dispelState[guid] then
+    elseif not scanResult and dispelState[guid] then
         DebugPrint("|cff888888CLEAR|r " .. unit .. ": no more dispellable debuffs")
         dispelState[guid] = false
         StopRepeat(guid)
@@ -747,13 +711,13 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             end
             NT_DispelSoundsDB.onlyPlayerDispellable = nil
             NT_DispelSoundsDB.racialEnabled = nil
-            NT_DispelSoundsDB.racialSoundFile = nil
             NT_DispelSoundsDB.racialSoundName = nil
             NT_DispelSoundsDB.racialSoundChannel = nil
             NT_DispelSoundsDB.racialCooldown = nil
             NT_DispelSoundsDB.racialOnlyOffCooldown = nil
 
-            -- Clean up old per-type filter keys (no longer used; secret values prevent type filtering)
+            -- Clean up removed options
+            NT_DispelSoundsDB.includeRacials = nil
             NT_DispelSoundsDB.filterMagic = nil
             NT_DispelSoundsDB.filterCurse = nil
             NT_DispelSoundsDB.filterDisease = nil
@@ -875,11 +839,6 @@ SlashCmdList["DISPELSOUNDALERT"] = function(msg)
             if #spells > 0 then
                 print("  Dispel spells: " .. table.concat(spells, ", "))
             end
-            local rt = {}
-            for t in pairs(autoRacialTypes) do rt[#rt + 1] = t end
-            if #rt > 0 then
-                print("  Racial types (self): " .. table.concat(rt, ", "))
-            end
             if autoRacialSpellID then
                 local rReady = IsSpellReady(autoRacialSpellID) and "|cff00ff00READY|r" or "|cffff0000ON CD|r"
                 print("  Racial spell: " .. autoRacialSpellID .. " (" .. rReady .. ")")
@@ -902,7 +861,7 @@ SlashCmdList["DISPELSOUNDALERT"] = function(msg)
             for t in pairs(autoDispelTypes) do types[#types + 1] = t end
             print("  Detected types: " .. (#types > 0 and table.concat(types, ", ") or "(none - no spec?)"))
             print("  Dispel ready: " .. (IsAnyDispelSpellReady() and "|cff00ff00YES|r" or "|cffff0000NO|r"))
-            if autoRacialSpellID and db.includeRacials then
+            if autoRacialSpellID then
                 print("  Racial ready: " .. (IsRacialDispelReady() and "|cff00ff00YES|r" or "|cffff0000NO|r"))
             end
         else
@@ -1012,34 +971,25 @@ function DSA:ShowChangelog()
     text:SetText(
         "|cffffd100What's New in v" .. ADDON_VERSION .. "|r\n\n"
         .. "|cff00ccffRenamed to NT_DispelSounds|r\n"
-        .. "This addon was previously called |cff888888DandersFrames_DispelSounds|r.\n"
-        .. "It has been renamed to |cff00ccffNT_DispelSounds|r.\n\n"
-
-        .. "|cff00ccffDandersFrames is no longer required|r\n"
-        .. "The addon is now fully standalone. It scans unit auras directly\n"
-        .. "using the WoW C_UnitAuras API. No external frame addon needed.\n\n"
+        .. "Previously DandersFrames_DispelSounds. Now fully standalone.\n\n"
 
         .. "|cff00ccffTwo detection modes|r\n"
-        .. "|cffffff00Dispellable by Me|r - Uses Blizzard's RAID_PLAYER_DISPELLABLE\n"
-        .. "filter to detect only debuffs your class/spec can remove.\n"
-        .. "Automatically updates when you change specs.\n\n"
-        .. "|cffffff00All Dispellable|r - Alerts for any debuff that has a dispel type\n"
-        .. "(Magic, Curse, Disease, Poison) on any group member.\n\n"
+        .. "|cffffff00Dispellable by Me|r - Only alerts for debuffs your\n"
+        .. "class/spec can remove. Updates when you change specs.\n\n"
+        .. "|cffffff00All Dispellable|r - Alerts for any dispellable debuff\n"
+        .. "on any group member.\n\n"
 
-        .. "|cff888888Note: WoW uses secret values for aura data in combat,\n"
-        .. "which prevents per-type filtering (e.g. only Magic). Both modes\n"
-        .. "are fully combat-safe.|r\n\n"
+        .. "|cff00ccffRacial self-dispel|r\n"
+        .. "Dwarves and Dark Iron Dwarves get an automatic racial alert\n"
+        .. "when you have a debuff and your racial is off cooldown.\n"
+        .. "Separate sound option for racial alerts.\n\n"
 
-        .. "|cff00ccffRacial support|r\n"
-        .. "Dwarf (Stoneform) and Dark Iron Dwarf (Fireblood) racials\n"
-        .. "are detected for self-dispel alerts on the player unit.\n\n"
-
-        .. "|cff00ccffPlayer unit monitoring|r\n"
-        .. "New option to enable/disable alerts for your own character.\n\n"
+        .. "|cff00ccffCooldown awareness|r\n"
+        .. "Optional: only alert when your dispel ability is ready.\n"
+        .. "Re-alerts when the ability comes off cooldown.\n\n"
 
         .. "|cff00ccffSettings migrated|r\n"
-        .. "Your previous sound, timing, and repeat settings carry over\n"
-        .. "automatically from the old saved variables.\n\n"
+        .. "Your previous settings carry over automatically.\n\n"
 
         .. "|cff888888Use |cffffff00/dsa|cff888888 to open options. "
         .. "Use |cffffff00/dsa changelog|cff888888 to show this again.|r"
@@ -1134,6 +1084,7 @@ end
 -- ============================================================================
 
 DSA.PlayDispelSound = PlayDispelSound
+DSA.PlayRacialSound = PlayRacialSound
 DSA.ScanAllUnits = ScanAllUnits
 DSA.ResolveSoundFile = ResolveSoundFile
 DSA.GetLSM = GetLSM

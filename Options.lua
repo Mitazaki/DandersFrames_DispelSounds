@@ -700,7 +700,6 @@ end
 local function BuildAutoDetectText()
     DSA.UpdateAutoDetect()
     local autoTypes = DSA.GetAutoDetectedTypes()
-    local racialTypes = DSA.GetAutoRacialTypes()
 
     local specName = GetSpecDisplayName()
     local lines = {}
@@ -719,18 +718,10 @@ local function BuildAutoDetectText()
         lines[#lines + 1] = "|cffff8888Spec:|r No dispel abilities detected  |cff888888(" .. specName .. ")|r"
     end
 
-    -- Racial types
-    local racialList = {}
-    for _, info in ipairs(DISPEL_TYPE_INFO) do
-        if racialTypes[info.key] then
-            local r, g, b = info.color[1], info.color[2], info.color[3]
-            racialList[#racialList + 1] = string.format("|cff%02x%02x%02x%s|r", r * 255, g * 255, b * 255, info.label)
-        end
-    end
-    if #racialList > 0 then
-        local _, raceFile = UnitRace("player")
-        local raceName = UnitRace("player") or raceFile or "Unknown"
-        lines[#lines + 1] = "|cff88ff88Racial:|r " .. table.concat(racialList, ", ") .. " (self only)  |cff888888(" .. raceName .. ")|r"
+    -- Racial info
+    if DSA.HasRacialDispel() then
+        local raceName = UnitRace("player") or "Unknown"
+        lines[#lines + 1] = "|cff88ff88Racial:|r Available  |cff888888(" .. raceName .. " — self only, separate sound)|r"
     end
 
     return table.concat(lines, "\n")
@@ -869,7 +860,7 @@ local function CreateOptionsPanel()
         label = "Enable for Player",
         get = function() return db.enablePlayer end,
         set = function(v) db.enablePlayer = v end,
-        tooltip = "Play sounds when dispellable debuffs appear on yourself. Includes racial self-dispels in Auto mode.",
+        tooltip = "Play sounds when dispellable debuffs appear on yourself. Includes racial self-dispel alerts.",
     }))
 
     -- ========================================================================
@@ -889,24 +880,14 @@ local function CreateOptionsPanel()
         onChange = function()
             RefreshAll()
         end,
-        tooltip = "Dispellable by Me: alerts only for debuffs your class/spec can remove (combat-safe, uses Blizzard RAID_PLAYER_DISPELLABLE filter).\n\nAll Dispellable: alerts for any debuff that has a dispel type (Magic, Curse, Disease, Poison) on any group member.",
-    }))
-
-    PlaceWidget(CreateCheckbox(content, {
-        label = "Include Racial abilities (self only)",
-        get = function() return db.includeRacials end,
-        set = function(v)
-            db.includeRacials = v
-            DSA.MarkAutoDetectDirty()
-        end,
-        tooltip = "In 'Dispellable by Me' mode, also check for any dispellable debuff on yourself that could be removed by racial abilities (e.g. Dwarf Stoneform, Dark Iron Fireblood).",
+        tooltip = "Dispellable by Me: alerts only for debuffs your class/spec can remove. Also alerts for racial self-dispel on the player unit.\n\nAll Dispellable: alerts for any dispellable debuff on any group member.",
     }))
 
     PlaceWidget(CreateCheckbox(content, {
         label = "Only alert when ability is ready",
         get = function() return db.onlyWhenReady end,
         set = function(v) db.onlyWhenReady = v end,
-        tooltip = "Only play the alert sound when your dispel ability (or racial) is off cooldown. Ignores the GCD (1.5s or less). Checks both spec dispel spells and racial spells.",
+        tooltip = "Only play the alert sound when your dispel ability (or racial) is off cooldown. Ignores the GCD. Re-scans when abilities come off cooldown.",
     }))
 
     -- Auto-detect status display
@@ -915,12 +896,6 @@ local function CreateOptionsPanel()
     autoStatusText:SetJustifyH("LEFT")
     autoStatusText:SetText(BuildAutoDetectText())
     PlaceFontString(autoStatusText, 4)
-
-    PlaceFontString(CreateInfoText(content,
-        "|cff888888Note: WoW uses secret values for aura data in combat. Per-type filtering "
-        .. "(e.g. only Magic, only Curse) is not possible. 'Dispellable by Me' uses Blizzard's "
-        .. "built-in class/spec filter. 'All Dispellable' checks for any debuff with a dispel type.|r"
-    ), 4)
 
     -- ========================================================================
     -- SECTION: Sound
@@ -981,6 +956,54 @@ local function CreateOptionsPanel()
     end)
 
     PlaceWidget(testBtn)
+
+    -- Racial Sound (self-dispel alert)
+    PlaceWidget(CreateDropdown(content, {
+        label = "Racial Alert Sound (self only)",
+        get = function() return db.racialSoundFile or DEFAULT_SOUND_LABEL end,
+        set = function(v)
+            if v == DEFAULT_SOUND_LABEL then
+                db.racialSoundFile = nil
+            else
+                db.racialSoundFile = v
+            end
+        end,
+        items = GetSoundList,
+        onChange = function()
+            C_Timer.After(0.05, function() DSA.PlayRacialSound(true) end)
+        end,
+        tooltip = "Sound to play when a racial-dispellable debuff is detected on yourself (e.g. Stoneform, Fireblood). Uses the main sound if not set.",
+    }))
+
+    -- Test racial sound button
+    local testRacialBtn = CreateFrame("Button", nil, content, "BackdropTemplate")
+    testRacialBtn:SetSize(130, 24)
+    testRacialBtn:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1,
+    })
+    testRacialBtn:SetBackdropColor(unpack(Colors.btnBg))
+    testRacialBtn:SetBackdropBorderColor(unpack(Colors.btnBorder))
+
+    local testRacialBtnText = testRacialBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    testRacialBtnText:SetPoint("CENTER")
+    testRacialBtnText:SetText("Test Racial Sound")
+    testRacialBtnText:SetTextColor(unpack(Colors.text))
+
+    testRacialBtn:SetScript("OnEnter", function()
+        testRacialBtn:SetBackdropColor(unpack(Colors.btnBgHover))
+        testRacialBtn:SetBackdropBorderColor(unpack(Colors.btnBorderHov))
+    end)
+    testRacialBtn:SetScript("OnLeave", function()
+        testRacialBtn:SetBackdropColor(unpack(Colors.btnBg))
+        testRacialBtn:SetBackdropBorderColor(unpack(Colors.btnBorder))
+    end)
+    testRacialBtn:SetScript("OnClick", function()
+        DSA.PlayRacialSound(true)
+    end)
+
+    PlaceWidget(testRacialBtn)
 
     -- ========================================================================
     -- SECTION: Timing
