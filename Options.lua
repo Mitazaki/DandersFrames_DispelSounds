@@ -58,14 +58,14 @@ local Colors = {
     enrage        = { 1.0, 0.4, 0.0, 1 },
 }
 
--- Dispel type display info
+-- Dispel type display info (for auto-detect readout only)
 local DISPEL_TYPE_INFO = {
-    { key = "Magic",   label = "Magic",   color = Colors.magic,   dbKey = "filterMagic" },
-    { key = "Curse",   label = "Curse",   color = Colors.curse,   dbKey = "filterCurse" },
-    { key = "Disease", label = "Disease", color = Colors.disease,  dbKey = "filterDisease" },
-    { key = "Poison",  label = "Poison",  color = Colors.poison,  dbKey = "filterPoison" },
-    { key = "Bleed",   label = "Bleed",   color = Colors.bleed,   dbKey = "filterBleed" },
-    { key = "Enrage",  label = "Enrage",  color = Colors.enrage,  dbKey = "filterEnrage" },
+    { key = "Magic",   label = "Magic",   color = Colors.magic },
+    { key = "Curse",   label = "Curse",   color = Colors.curse },
+    { key = "Disease", label = "Disease", color = Colors.disease },
+    { key = "Poison",  label = "Poison",  color = Colors.poison },
+    { key = "Bleed",   label = "Bleed",   color = Colors.bleed },
+    { key = "Enrage",  label = "Enrage",  color = Colors.enrage },
 }
 
 -- ============================================================================
@@ -877,31 +877,19 @@ local function CreateOptionsPanel()
     -- ========================================================================
     PlaceWidget(CreateSectionHeader(content, "Dispel Detection"), SECTION_GAP)
 
-    -- Track manual type checkboxes for enable/disable toggling
-    local manualTypeCheckboxes = {}
-
-    local function UpdateManualCheckboxState()
-        local isManual = db.filterMode == "manual"
-        for _, cb in ipairs(manualTypeCheckboxes) do
-            cb:SetDisabled(not isManual)
-        end
-    end
-
     PlaceWidget(CreateDropdown(content, {
         label = "Detection Mode",
         get = function()
-            return db.filterMode == "auto" and "Automatic" or "Manual"
+            return db.filterMode == "auto" and "Dispellable by Me" or "All Dispellable"
         end,
         set = function(v)
-            db.filterMode = (v == "Automatic") and "auto" or "manual"
-            UpdateManualCheckboxState()
+            db.filterMode = (v == "Dispellable by Me") and "auto" or "all"
         end,
-        items = function() return { "Automatic", "Manual" } end,
+        items = function() return { "Dispellable by Me", "All Dispellable" } end,
         onChange = function()
-            UpdateManualCheckboxState()
             RefreshAll()
         end,
-        tooltip = "Automatic: detect dispel types from your class, spec, and racials.\nManual: choose which debuff types trigger alerts.",
+        tooltip = "Dispellable by Me: alerts only for debuffs your class/spec can remove (combat-safe, uses Blizzard RAID_PLAYER_DISPELLABLE filter).\n\nAll Dispellable: alerts for any debuff that has a dispel type (Magic, Curse, Disease, Poison) on any group member.",
     }))
 
     PlaceWidget(CreateCheckbox(content, {
@@ -911,7 +899,7 @@ local function CreateOptionsPanel()
             db.includeRacials = v
             DSA.MarkAutoDetectDirty()
         end,
-        tooltip = "In Auto mode, also detect racial self-dispel abilities (e.g. Dwarf Stoneform, Dark Iron Fireblood). These only apply to your own debuffs.",
+        tooltip = "In 'Dispellable by Me' mode, also check for any dispellable debuff on yourself that could be removed by racial abilities (e.g. Dwarf Stoneform, Dark Iron Fireblood).",
     }))
 
     -- Auto-detect status display
@@ -922,27 +910,10 @@ local function CreateOptionsPanel()
     PlaceFontString(autoStatusText, 4)
 
     PlaceFontString(CreateInfoText(content,
-        "|cff888888Manual type filters below are used when Detection Mode is Manual. "
-        .. "In Automatic mode they are ignored.|r"
+        "|cff888888Note: WoW uses secret values for aura data in combat. Per-type filtering "
+        .. "(e.g. only Magic, only Curse) is not possible. 'Dispellable by Me' uses Blizzard's "
+        .. "built-in class/spec filter. 'All Dispellable' checks for any debuff with a dispel type.|r"
     ), 4)
-
-    -- Manual type checkboxes
-    for _, info in ipairs(DISPEL_TYPE_INFO) do
-        local r, g, b = info.color[1], info.color[2], info.color[3]
-        local coloredLabel = string.format("|cff%02x%02x%02x%s|r", r * 255, g * 255, b * 255, info.label)
-
-        local cb = CreateCheckbox(content, {
-            label = coloredLabel,
-            get = function() return db[info.dbKey] end,
-            set = function(v) db[info.dbKey] = v end,
-            tooltip = "Alert for " .. info.label .. " debuffs on group members.",
-        })
-        PlaceWidget(cb)
-        manualTypeCheckboxes[#manualTypeCheckboxes + 1] = cb
-    end
-
-    -- Set initial checkbox state
-    UpdateManualCheckboxState()
 
     -- ========================================================================
     -- SECTION: Sound
@@ -1073,7 +1044,6 @@ local function CreateOptionsPanel()
     -- ========================================================================
     panel:SetScript("OnShow", function()
         autoStatusText:SetText(BuildAutoDetectText())
-        UpdateManualCheckboxState()
         RefreshAll()
     end)
 
@@ -1140,7 +1110,6 @@ local function CreateOptionsPanel()
             end
             DSA.MarkAutoDetectDirty()
             autoStatusText:SetText(BuildAutoDetectText())
-            UpdateManualCheckboxState()
             RefreshAll()
         end,
         timeout = 0,

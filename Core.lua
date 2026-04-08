@@ -17,12 +17,6 @@ local DEFAULTS = {
     enableRaid = true,
     enablePlayer = true,
     filterMode = "auto",
-    filterMagic = true,
-    filterCurse = true,
-    filterDisease = true,
-    filterPoison = true,
-    filterBleed = false,
-    filterEnrage = false,
     includeRacials = true,
     soundFile = nil,
     soundChannel = "Master",
@@ -95,22 +89,6 @@ local DISPEL_NAME_TO_KEY = {
     ["Curse"]   = "Curse",
     ["Disease"] = "Disease",
     ["Poison"]  = "Poison",
-}
-
--- dispelType integer -> our key (for Bleed/Enrage which may lack dispelName)
-local DISPEL_TYPE_TO_KEY = {
-    [9]  = "Enrage",
-    [11] = "Bleed",
-}
-
--- Filter key -> saved variable key
-local FILTER_DB_KEY = {
-    Magic   = "filterMagic",
-    Curse   = "filterCurse",
-    Disease = "filterDisease",
-    Poison  = "filterPoison",
-    Bleed   = "filterBleed",
-    Enrage  = "filterEnrage",
 }
 
 -- ============================================================================
@@ -211,7 +189,7 @@ function DSA.MarkAutoDetectDirty()
 end
 
 -- ============================================================================
--- DISPEL TYPE FILTER
+-- DISPEL TYPE FILTER (informational — used for auto-detect display only)
 -- ============================================================================
 
 local function IsDispelTypeEnabled(dispelType, unit)
@@ -225,45 +203,87 @@ local function IsDispelTypeEnabled(dispelType, unit)
         end
         return false
     else
-        local key = FILTER_DB_KEY[dispelType]
-        return key and db[key] or false
+        -- "all" mode: any dispellable aura triggers
+        return true
     end
 end
 
 -- ============================================================================
 -- AURA SCANNING
+-- Combat-safe: aura fields (dispelName, dispelType, etc.) are secret values
+-- in WoW and cannot be used as table indices or compared to strings.
+-- We use C_UnitAuras.IsAuraFilteredOut with RAID_PLAYER_DISPELLABLE (auto)
+-- or nil-checks on dispelName (all mode) which are secret-safe.
 -- ============================================================================
+
+local FILTER_PLAYER_DISPELLABLE = "HARMFUL|RAID_PLAYER_DISPELLABLE"
 
 local function ScanUnitForDispellableDebuffs(unit)
     if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return false end
     if not UnitExists(unit) then return false end
 
-    for i = 1, 40 do
-        local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
-        if not auraData then break end
+    if db.filterMode == "auto" then
+        -- Auto mode: use Blizzard's RAID_PLAYER_DISPELLABLE filter (combat-safe)
+        -- This matches debuffs the player's class/spec can remove
+        local IsAuraFilteredOut = C_UnitAuras.IsAuraFilteredOut
+        if IsAuraFilteredOut then
+            for i = 1, 40 do
+                local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
+                if not auraData then break end
 
-        -- Standard types via dispelName (Magic, Curse, Disease, Poison)
-        local dispelName = auraData.dispelName
-        if dispelName then
-            local key = DISPEL_NAME_TO_KEY[dispelName]
-            if key and IsDispelTypeEnabled(key, unit) then
-                DebugPrint("|cff88ff88Scan " .. unit .. ":|r found " .. key .. " (dispelName)")
+                local id = auraData.auraInstanceID
+                if id and not IsAuraFilteredOut(unit, id, FILTER_PLAYER_DISPELLABLE) then
+                    DebugPrint("|cff88ff88Scan " .. unit .. ":|r player-dispellable aura found (id=" .. id .. ")")
+                    return true
+                end
+            end
+        else
+            -- Fallback if IsAuraFilteredOut unavailable: nil-check dispelName
+            for i = 1, 40 do
+                local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
+                if not auraData then break end
+
+                -- nil-check is safe with secret values (returns true if value exists but is secret)
+                if auraData.dispelName ~= nil then
+                    DebugPrint("|cff88ff88Scan " .. unit .. ":|r dispellable aura found (fallback)")
+                    return true
+                end
+            end
+        end
+
+        -- For racial self-dispels on player: check if any harmful aura is dispellable
+        -- Racials (Stoneform, Fireblood) can remove types not in RAID_PLAYER_DISPELLABLE
+        if db.includeRacials and UnitIsUnit(unit, "player") then
+            local hasRacials = next(autoRacialTypes) ~= nil
+            if hasRacials then
+                for i = 1, 40 do
+                    local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
+                    if not auraData then break end
+
+                    if auraData.dispelName ~= nil then
+                        DebugPrint("|cff88ff88Scan " .. unit .. ":|r racial-dispellable aura on self")
+                        return true
+                    end
+                end
+            end
+        end
+
+        return false
+    else
+        -- All Dispellable mode: alert for any harmful aura with a dispel type
+        -- nil-check on dispelName is safe with secret values
+        for i = 1, 40 do
+            local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
+            if not auraData then break end
+
+            if auraData.dispelName ~= nil then
+                DebugPrint("|cff88ff88Scan " .. unit .. ":|r dispellable aura found (all mode)")
                 return true
             end
         end
 
-        -- Bleed/Enrage via dispelType integer (may not have dispelName)
-        local dispelTypeInt = auraData.dispelType
-        if dispelTypeInt then
-            local key = DISPEL_TYPE_TO_KEY[dispelTypeInt]
-            if key and IsDispelTypeEnabled(key, unit) then
-                DebugPrint("|cff88ff88Scan " .. unit .. ":|r found " .. key .. " (dispelType=" .. dispelTypeInt .. ")")
-                return true
-            end
-        end
+        return false
     end
-
-    return false
 end
 
 -- ============================================================================
@@ -552,6 +572,19 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             NT_DispelSoundsDB.racialCooldown = nil
             NT_DispelSoundsDB.racialOnlyOffCooldown = nil
 
+            -- Clean up old per-type filter keys (no longer used; secret values prevent type filtering)
+            NT_DispelSoundsDB.filterMagic = nil
+            NT_DispelSoundsDB.filterCurse = nil
+            NT_DispelSoundsDB.filterDisease = nil
+            NT_DispelSoundsDB.filterPoison = nil
+            NT_DispelSoundsDB.filterBleed = nil
+            NT_DispelSoundsDB.filterEnrage = nil
+
+            -- Migrate old "manual" mode to "all"
+            if NT_DispelSoundsDB.filterMode == "manual" then
+                NT_DispelSoundsDB.filterMode = "all"
+            end
+
             db = NT_DispelSoundsDB
             DSA.db = db
 
@@ -649,11 +682,7 @@ SlashCmdList["DISPELSOUNDALERT"] = function(msg)
             for t in pairs(autoDispelTypes) do types[#types + 1] = t end
             print("  Detected types: " .. (#types > 0 and table.concat(types, ", ") or "(none - no spec?)"))
         else
-            local active = {}
-            for typeName, key in pairs(FILTER_DB_KEY) do
-                if db[key] then active[#active + 1] = typeName end
-            end
-            print("  Manual types: " .. (#active > 0 and table.concat(active, ", ") or "(none)"))
+            print("  All Dispellable mode: alerts for any dispellable debuff")
         end
         print("  Sound: " .. tostring(db.soundFile or "(default)"))
         print("  Channel: " .. tostring(db.soundChannel))
@@ -766,15 +795,16 @@ function DSA:ShowChangelog()
         .. "The addon is now fully standalone. It scans unit auras directly\n"
         .. "using the WoW C_UnitAuras API. No external frame addon needed.\n\n"
 
-        .. "|cff00ccffAutomatic dispel detection|r\n"
-        .. "The addon detects your class, specialization, and racial\n"
-        .. "abilities to determine which debuff types you can remove.\n"
-        .. "It updates automatically when you change specs.\n\n"
+        .. "|cff00ccffTwo detection modes|r\n"
+        .. "|cffffff00Dispellable by Me|r - Uses Blizzard's RAID_PLAYER_DISPELLABLE\n"
+        .. "filter to detect only debuffs your class/spec can remove.\n"
+        .. "Automatically updates when you change specs.\n\n"
+        .. "|cffffff00All Dispellable|r - Alerts for any debuff that has a dispel type\n"
+        .. "(Magic, Curse, Disease, Poison) on any group member.\n\n"
 
-        .. "|cff00ccffManual mode|r\n"
-        .. "If you prefer full control, switch to Manual mode and\n"
-        .. "select exactly which types to alert for:\n"
-        .. "  |cff3399ffMagic|r, |cff9900ffCurse|r, |cff996600Disease|r, |cff009900Poison|r, |cffff0000Bleed|r, |cffff6600Enrage|r\n\n"
+        .. "|cff888888Note: WoW uses secret values for aura data in combat,\n"
+        .. "which prevents per-type filtering (e.g. only Magic). Both modes\n"
+        .. "are fully combat-safe.|r\n\n"
 
         .. "|cff00ccffRacial support|r\n"
         .. "Dwarf (Stoneform) and Dark Iron Dwarf (Fireblood) racials\n"
