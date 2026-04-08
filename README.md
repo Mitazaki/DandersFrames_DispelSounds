@@ -1,113 +1,121 @@
-# DandersFrames_DispelSounds
+# NT_DispelSounds
 
-`DandersFrames_DispelSounds` plays an alert sound when `DandersFrames` shows its dispel overlay on party or raid frames.
+Standalone addon that plays an alert sound when a dispellable debuff is detected on party or raid members.
 
-The addon does not try to re-evaluate dispel logic itself. It listens to `DandersFrames` overlay visibility and uses that as the source of truth. This makes it compatible with current Midnight aura and secret-data behavior, while keeping all dispel filtering under `DandersFrames` control.
+This addon performs its own aura scanning using the WoW `C_UnitAuras` API. No external frame addon is required.
 
 ## Features
 
-- Plays a sound when a `DandersFrames` dispel overlay appears on a unit frame.
-- Works for party frames and raid frames.
+- Plays a sound when a dispellable debuff appears on a group member.
+- **Automatic mode**: Detects your class/spec dispel capabilities and only alerts for debuff types you can remove.
+- **Manual mode**: Choose exactly which debuff types trigger alerts.
+- Supports all dispel types: **Magic**, **Curse**, **Disease**, **Poison**, **Bleed**, **Enrage**.
+- Supports racial abilities (Dwarf Stoneform, Dark Iron Fireblood) for self-dispel detection.
+- Works for party frames, raid frames, and the player.
 - Supports `LibSharedMedia-3.0` sound selection.
-- Supports per-unit cooldowns to reduce spam.
-- Supports repeat alerts while the overlay remains visible.
-- Includes a debug mode for chat logging.
-- Includes an in-game options panel and slash command access.
+- Per-unit cooldowns to reduce spam.
+- Repeat alerts while the debuff remains active.
+- Debug mode for chat logging.
+- In-game options panel and slash commands.
+
+## Automatic Detection
+
+In **Automatic** mode, the addon determines which debuff types you can dispel based on your class and specialization:
+
+| Class | Spec | Dispel Types |
+|-------|------|-------------|
+| Paladin | Holy | Magic, Poison, Disease |
+| Paladin | Protection, Retribution | Poison, Disease |
+| Priest | Discipline, Holy | Magic, Disease |
+| Priest | Shadow | Disease |
+| Shaman | Elemental, Enhancement | Curse |
+| Shaman | Restoration | Magic, Curse |
+| Mage | All | Curse |
+| Monk | Brewmaster, Windwalker | Poison, Disease |
+| Monk | Mistweaver | Magic, Poison, Disease |
+| Druid | Balance, Feral, Guardian | Curse, Poison |
+| Druid | Restoration | Magic, Curse, Poison |
+| Evoker | Devastation, Augmentation | Poison, Disease, Curse, Bleed |
+| Evoker | Preservation | Magic, Poison, Disease, Curse, Bleed |
+
+### Racial Abilities (Self Only)
+
+| Race | Ability | Types |
+|------|---------|-------|
+| Dwarf | Stoneform | Poison, Disease, Bleed |
+| Dark Iron Dwarf | Fireblood | Poison, Disease, Curse, Bleed, Magic |
+
+Racial abilities only affect your own debuffs and are enabled via the "Include Racial abilities" option.
 
 ## Requirements
 
-- `DandersFrames`
+- World of Warcraft (Retail)
 - Optional: `LibSharedMedia-3.0` for custom sounds
 
 ## Installation
 
 Install the addon folder here:
 
-`World of Warcraft\_retail_\Interface\AddOns\DandersFrames_DispelSounds`
-
-Make sure `DandersFrames` is enabled as well.
-
-## How It Works
-
-This addon listens for `DandersFrames` dispel overlay show/hide events.
-
-That means the alert behavior depends on your `DandersFrames` Debuff Overlay configuration.
-
-Recommended setup in `DandersFrames`:
-
-`/df > Dispel Overlay > Show Overlay for: Only dispellable by me`
-
-If you use that setting, this addon will alert only for debuffs that `DandersFrames` considers dispellable by your character.
-
-You can also configure which types are included in `DandersFrames`, such as:
-
-- `Magic`
-- `Curse`
-- `Disease`
-- `Poison`
-- `Bleed/Enrage`
+`World of Warcraft\_retail_\Interface\AddOns\NT_DispelSounds`
 
 ## Slash Commands
 
-The addon uses the slash command:
-
-`/dsa`
-
-Available commands:
-
-- `/dsa`
-  Opens the options panel.
-
-- `/dsa test`
-  Plays the currently selected alert sound.
-
-- `/dsa debug`
-  Toggles debug logging to the chat window.
-
-- `/dsa status`
-  Prints the current addon status and sound configuration.
-
-- `/dsa reset`
-  Resets the addon's in-memory tracking state.
+- `/dsa` — Open the options panel
+- `/dsa test` — Play the currently selected alert sound
+- `/dsa debug` — Toggle debug logging
+- `/dsa status` — Print current addon status
+- `/dsa reset` — Reset tracking state
+- `/dsa scan` — Force rescan all units
+- `/dsa changelog` — Show changelog popup
 
 ## Options
 
 The options panel includes:
 
-- `Enable Dispel Sound Alert`
-- `Enable for Party frames`
-- `Enable for Raid frames`
-- `Alert Sound`
-- `Sound Channel`
-- `Per-Unit Cooldown`
-- `Global Cooldown`
-- `Repeat sound while debuff persists`
-- `Repeat Interval`
-- `Debug mode`
+**General**
+- Enable Dispel Sound Alert
+- Enable for Party frames
+- Enable for Raid frames
+- Enable for Player
 
-## Debug Mode
+**Dispel Detection**
+- Detection Mode (Automatic / Manual)
+- Include Racial abilities (self only)
+- Manual type filters: Magic, Curse, Disease, Poison, Bleed, Enrage
 
-Debug mode prints chat messages when:
+**Sound**
+- Alert Sound (LibSharedMedia)
+- Sound Channel
+- Test Sound button
 
-- a `UNIT_AURA` sync occurs
-- a `DandersFrames` overlay is hooked
-- an overlay appears or disappears
-- a sound playback attempt happens
-- cooldown protection blocks playback
+**Timing**
+- Per-Unit Cooldown
+- Global Cooldown
 
-Use `/dsa debug` to turn it on or off.
+**Repeat Alert**
+- Repeat sound while debuff persists
+- Repeat Interval
+
+**Debug**
+- Debug mode (log to chat)
+
+## How It Works
+
+The addon listens to `UNIT_AURA` events for party, raid, and player units. When an aura change occurs, it scans the unit's harmful auras using `C_UnitAuras.GetAuraDataByIndex`. Each aura's `dispelName` (Magic, Curse, Disease, Poison) and `dispelType` (for Bleed/Enrage) are checked against the active filter.
+
+In **Automatic** mode, the filter is built from your class/spec dispel capabilities (updated on spec change). In **Manual** mode, you control which types are active.
+
+When a new dispellable debuff is detected on a unit that wasn't previously tracked, the alert sound plays. Per-unit and global cooldowns prevent sound spam.
+
+## Migrating from DandersFrames_DispelSounds
+
+This addon uses a new `NT_DispelSoundsDB` saved variable. On first load it will
+automatically migrate your settings from the old `DispelSoundAlertDB`. Your sound,
+timing, and repeat settings will carry over. The addon no longer requires
+DandersFrames — all dispel detection is built-in.
 
 ## Notes
 
-- This addon is intentionally lightweight.
-- It does not duplicate `DandersFrames` dispel logic.
-- If alerts are not firing, check your `DandersFrames` Debuff Overlay settings first.
-- If custom sounds are unavailable, the addon falls back to a built-in WoW sound.
-
-## Version
-
-Current version: `1.0.0-beta1`
-
-## Author
-
-`Numbtongue (Drinkstea-Draenor-EU)`
+- The addon automatically re-detects dispel types when you change specialization.
+- GUID-based tracking ensures the same character referenced by different unit IDs (e.g., "player" and "raid5") won't cause duplicate alerts.
+- Bleed and Enrage detection uses the `dispelType` integer field from aura data, which may not be available for all debuffs.

@@ -1,0 +1,12 @@
+## Interface: 120001
+## Title: NT_DispelSounds
+## Notes: Standalone dispel sound alerts for party and raid frames with automatic class/spec/racial detection
+## Author: Numbtongue
+## Version: 2.0.0
+## SavedVariables: NT_DispelSoundsDB
+## OptionalDeps: LibSharedMedia-3.0
+## IconTexture: Interface\Icons\Spell_Holy_DispelMagic
+## Category: Buffs & Debuffs
+
+Core.lua
+Options.lua

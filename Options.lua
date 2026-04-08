@@ -1,5 +1,5 @@
 -- ============================================================================
--- DandersFrames_DispelSounds - Options Panel
+-- NT_DispelSounds - Options Panel (Standalone)
 -- ============================================================================
 
 local addonName, DSA = ...
@@ -9,7 +9,7 @@ local addonName, DSA = ...
 -- ============================================================================
 
 local PANEL_WIDTH = 420
-local PANEL_HEIGHT = 540
+local PANEL_HEIGHT = 600
 local COL_PADDING = 20
 local COMPONENT_GAP = 6
 local SECTION_GAP = 14
@@ -18,8 +18,8 @@ local FOOTER_HEIGHT = 52
 
 local DEFAULT_SOUND_LABEL = "(Default: Raid Warning)"
 local NONE_SOUND_LABEL = "None"
-local ADDON_DISPLAY_NAME = "DandersFrames_DispelSounds"
-local ADDON_VERSION = "1.0.0-beta1"
+local ADDON_DISPLAY_NAME = DSA.ADDON_DISPLAY_NAME or "NT_DispelSounds"
+local ADDON_VERSION = DSA.ADDON_VERSION or "2.0.0"
 
 -- Color palette
 local Colors = {
@@ -39,6 +39,7 @@ local Colors = {
     btnBorderHov  = { 0.5, 0.5, 0.5, 1 },
     checkOn       = { 1, 0.82, 0, 1 },
     checkOff      = { 0.3, 0.3, 0.3, 1 },
+    checkDisabled = { 0.2, 0.2, 0.2, 1 },
     sliderTrack   = { 0.2, 0.2, 0.2, 1 },
     sliderFill    = { 0.6, 0.5, 0.1, 1 },
     sliderThumb   = { 0.4, 0.4, 0.4, 1 },
@@ -49,6 +50,22 @@ local Colors = {
     separator     = { 0.25, 0.25, 0.25, 0.8 },
     success       = { 0.2, 0.8, 0.2, 1 },
     warning       = { 1, 0.6, 0, 1 },
+    magic         = { 0.2, 0.6, 1.0, 1 },
+    curse         = { 0.6, 0.0, 1.0, 1 },
+    disease       = { 0.6, 0.4, 0.0, 1 },
+    poison        = { 0.0, 0.6, 0.0, 1 },
+    bleed         = { 1.0, 0.0, 0.0, 1 },
+    enrage        = { 1.0, 0.4, 0.0, 1 },
+}
+
+-- Dispel type display info
+local DISPEL_TYPE_INFO = {
+    { key = "Magic",   label = "Magic",   color = Colors.magic,   dbKey = "filterMagic" },
+    { key = "Curse",   label = "Curse",   color = Colors.curse,   dbKey = "filterCurse" },
+    { key = "Disease", label = "Disease", color = Colors.disease,  dbKey = "filterDisease" },
+    { key = "Poison",  label = "Poison",  color = Colors.poison,  dbKey = "filterPoison" },
+    { key = "Bleed",   label = "Bleed",   color = Colors.bleed,   dbKey = "filterBleed" },
+    { key = "Enrage",  label = "Enrage",  color = Colors.enrage,  dbKey = "filterEnrage" },
 }
 
 -- ============================================================================
@@ -97,7 +114,6 @@ end
 -- UI COMPONENT FACTORIES
 -- ============================================================================
 
--- Refreshable component tracking
 local refreshableComponents = {}
 
 local function RegisterRefreshable(widget, refreshFn)
@@ -121,7 +137,6 @@ local function CreateCheckbox(parent, config)
     local holder = CreateFrame("Frame", nil, parent)
     holder:SetSize(config.width or (PANEL_WIDTH - COL_PADDING * 2), 22)
 
-    -- Checkbox box
     local box = CreateFrame("Frame", nil, holder, "BackdropTemplate")
     box:SetSize(16, 16)
     box:SetPoint("LEFT", 0, 0)
@@ -131,46 +146,63 @@ local function CreateCheckbox(parent, config)
         edgeSize = 1,
     })
 
-    -- Checkmark
     local check = box:CreateTexture(nil, "OVERLAY")
     check:SetSize(12, 12)
     check:SetPoint("CENTER")
     check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
 
-    -- Label
     local label = holder:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     label:SetPoint("LEFT", box, "RIGHT", 6, 0)
     label:SetText(config.label)
     label:SetTextColor(unpack(Colors.text))
 
+    holder._isDisabled = false
+
     local function UpdateVisual()
         local checked = config.get()
+        local disabled = holder._isDisabled
         if checked then
-            box:SetBackdropColor(Colors.checkOn[1] * 0.3, Colors.checkOn[2] * 0.3, Colors.checkOn[3] * 0.3, 1)
-            box:SetBackdropBorderColor(unpack(Colors.checkOn))
-            check:Show()
+            if disabled then
+                box:SetBackdropColor(Colors.checkOn[1] * 0.15, Colors.checkOn[2] * 0.15, Colors.checkOn[3] * 0.15, 1)
+                box:SetBackdropBorderColor(unpack(Colors.checkDisabled))
+                check:Show()
+                check:SetAlpha(0.4)
+                label:SetTextColor(unpack(Colors.textMuted))
+            else
+                box:SetBackdropColor(Colors.checkOn[1] * 0.3, Colors.checkOn[2] * 0.3, Colors.checkOn[3] * 0.3, 1)
+                box:SetBackdropBorderColor(unpack(Colors.checkOn))
+                check:Show()
+                check:SetAlpha(1)
+                label:SetTextColor(unpack(Colors.text))
+            end
         else
-            box:SetBackdropColor(0.1, 0.1, 0.1, 1)
-            box:SetBackdropBorderColor(unpack(Colors.checkOff))
-            check:Hide()
+            if disabled then
+                box:SetBackdropColor(0.05, 0.05, 0.05, 1)
+                box:SetBackdropBorderColor(unpack(Colors.checkDisabled))
+                check:Hide()
+                label:SetTextColor(unpack(Colors.textMuted))
+            else
+                box:SetBackdropColor(0.1, 0.1, 0.1, 1)
+                box:SetBackdropBorderColor(unpack(Colors.checkOff))
+                check:Hide()
+                label:SetTextColor(unpack(Colors.text))
+            end
         end
     end
 
-    box:EnableMouse(true)
-    box:SetScript("OnMouseUp", function()
+    local function OnClick()
+        if holder._isDisabled then return end
         local newVal = not config.get()
         config.set(newVal)
         UpdateVisual()
-    end)
+        if config.onChange then config.onChange(newVal) end
+    end
 
-    -- Make label clickable too
-    label:EnableMouse(true) -- FontStrings don't support this; use holder
+    box:EnableMouse(true)
+    box:SetScript("OnMouseUp", OnClick)
+
     holder:EnableMouse(true)
-    holder:SetScript("OnMouseUp", function()
-        local newVal = not config.get()
-        config.set(newVal)
-        UpdateVisual()
-    end)
+    holder:SetScript("OnMouseUp", OnClick)
 
     if config.tooltip then
         holder:SetScript("OnEnter", function(self)
@@ -185,6 +217,10 @@ local function CreateCheckbox(parent, config)
     holder.box = box
     holder.check = check
     holder.label = label
+    holder.SetDisabled = function(self, disabled)
+        self._isDisabled = disabled
+        UpdateVisual()
+    end
     return holder
 end
 
@@ -203,7 +239,6 @@ local function CreateSlider(parent, config)
     local holder = CreateFrame("Frame", nil, parent)
     holder:SetSize(labelWidth + sliderWidth + 60, 22)
 
-    -- Label
     local label = holder:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     label:SetPoint("LEFT", 0, 0)
     label:SetWidth(labelWidth)
@@ -211,7 +246,6 @@ local function CreateSlider(parent, config)
     label:SetText(config.label)
     label:SetTextColor(unpack(Colors.text))
 
-    -- Track background
     local trackBg = CreateFrame("Frame", nil, holder, "BackdropTemplate")
     trackBg:SetPoint("LEFT", label, "RIGHT", 4, 0)
     trackBg:SetSize(sliderWidth, TRACK_HEIGHT)
@@ -223,13 +257,11 @@ local function CreateSlider(parent, config)
     trackBg:SetBackdropColor(unpack(Colors.sliderTrack))
     trackBg:SetBackdropBorderColor(unpack(Colors.sliderTrack))
 
-    -- Track fill
     local trackFill = trackBg:CreateTexture(nil, "ARTWORK")
     trackFill:SetPoint("LEFT")
     trackFill:SetHeight(TRACK_HEIGHT)
     trackFill:SetColorTexture(unpack(Colors.sliderFill))
 
-    -- Thumb
     local thumb = CreateFrame("Frame", nil, trackBg, "BackdropTemplate")
     thumb:SetSize(THUMB_WIDTH, THUMB_HEIGHT)
     thumb:SetBackdrop({
@@ -240,7 +272,6 @@ local function CreateSlider(parent, config)
     thumb:SetBackdropColor(unpack(Colors.sliderThumb))
     thumb:SetBackdropBorderColor(unpack(Colors.sliderThumb))
 
-    -- Value text
     local valueText = holder:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     valueText:SetPoint("LEFT", trackBg, "RIGHT", 6, 0)
     valueText:SetTextColor(unpack(Colors.textDim))
@@ -260,12 +291,10 @@ local function CreateSlider(parent, config)
 
     local function SetValue(val)
         val = math.max(config.min, math.min(config.max, val))
-        -- Snap to step
         val = math.floor(val / step + 0.5) * step
         currentValue = val
         config.set(val)
 
-        -- Update visuals
         local pct = (val - config.min) / math.max(config.max - config.min, 0.001)
         local trackW = trackBg:GetWidth()
         trackFill:SetWidth(math.max(1, pct * trackW))
@@ -285,13 +314,9 @@ local function CreateSlider(parent, config)
 
     thumb:EnableMouse(true)
     thumb:SetScript("OnMouseDown", function(self, button)
-        if button == "LeftButton" then
-            isDragging = true
-        end
+        if button == "LeftButton" then isDragging = true end
     end)
-    thumb:SetScript("OnMouseUp", function()
-        isDragging = false
-    end)
+    thumb:SetScript("OnMouseUp", function() isDragging = false end)
 
     trackBg:EnableMouse(true)
     trackBg:SetScript("OnMouseDown", function(self, button)
@@ -301,11 +326,8 @@ local function CreateSlider(parent, config)
             isDragging = true
         end
     end)
-    trackBg:SetScript("OnMouseUp", function()
-        isDragging = false
-    end)
+    trackBg:SetScript("OnMouseUp", function() isDragging = false end)
 
-    -- Global drag tracking
     holder:SetScript("OnUpdate", function()
         if isDragging then
             local x = GetCursorPosition() / UIParent:GetEffectiveScale()
@@ -316,7 +338,6 @@ local function CreateSlider(parent, config)
         end
     end)
 
-    -- Mouse wheel
     trackBg:EnableMouseWheel(true)
     trackBg:SetScript("OnMouseWheel", function(self, delta)
         SetValue(currentValue + delta * step)
@@ -346,7 +367,6 @@ local function CreateSlider(parent, config)
         holder:SetScript("OnLeave", HideTooltip)
     end
 
-    -- Initial state
     SetValue(currentValue)
     RegisterRefreshable(holder, function() SetValue(config.get()) end)
 
@@ -367,7 +387,6 @@ local function CreateDropdown(parent, config)
     local holder = CreateFrame("Frame", nil, parent)
     holder:SetSize(labelWidth + dropWidth + 8, 24)
 
-    -- Label
     local label = holder:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     label:SetPoint("LEFT", 0, 0)
     label:SetWidth(labelWidth)
@@ -375,7 +394,6 @@ local function CreateDropdown(parent, config)
     label:SetText(config.label)
     label:SetTextColor(unpack(Colors.text))
 
-    -- Button
     local btn = CreateFrame("Button", nil, holder, "BackdropTemplate")
     btn:SetPoint("LEFT", label, "RIGHT", 4, 0)
     btn:SetSize(dropWidth, 22)
@@ -393,14 +411,12 @@ local function CreateDropdown(parent, config)
     btnText:SetJustifyH("LEFT")
     btnText:SetTextColor(unpack(Colors.text))
 
-    -- Arrow
     local arrow = btn:CreateTexture(nil, "OVERLAY")
     arrow:SetSize(10, 10)
     arrow:SetPoint("RIGHT", -4, 0)
     arrow:SetTexture("Interface\\Buttons\\UI-SortArrow")
-    arrow:SetTexCoord(0, 1, 1, 0)  -- Flip to point down
+    arrow:SetTexCoord(0, 1, 1, 0)
 
-    -- Dropdown menu frame
     local menuFrame = CreateFrame("Frame", nil, btn, "BackdropTemplate")
     menuFrame:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
@@ -463,9 +479,7 @@ local function CreateDropdown(parent, config)
         local needsScroll = #currentItems > maxVisible
         scrollUp:SetShown(needsScroll)
         scrollDown:SetShown(needsScroll)
-        if not needsScroll then
-            return
-        end
+        if not needsScroll then return end
 
         scrollUp:SetEnabled(scrollOffset > 0)
         scrollDown:SetEnabled(scrollOffset < (#currentItems - maxVisible))
@@ -669,6 +683,60 @@ local function CreateInfoText(parent, text)
 end
 
 -- ============================================================================
+-- AUTO-DETECT STATUS HELPERS
+-- ============================================================================
+
+local function GetSpecDisplayName()
+    local specIndex = GetSpecialization()
+    if not specIndex then return "No Spec" end
+    local _, name = GetSpecializationInfo(specIndex)
+    local _, className = UnitClass("player")
+    if name and className then
+        return name .. " " .. className
+    end
+    return name or className or "Unknown"
+end
+
+local function BuildAutoDetectText()
+    DSA.UpdateAutoDetect()
+    local autoTypes = DSA.GetAutoDetectedTypes()
+    local racialTypes = DSA.GetAutoRacialTypes()
+
+    local specName = GetSpecDisplayName()
+    local lines = {}
+
+    -- Spec types
+    local typeList = {}
+    for _, info in ipairs(DISPEL_TYPE_INFO) do
+        if autoTypes[info.key] then
+            local r, g, b = info.color[1], info.color[2], info.color[3]
+            typeList[#typeList + 1] = string.format("|cff%02x%02x%02x%s|r", r * 255, g * 255, b * 255, info.label)
+        end
+    end
+    if #typeList > 0 then
+        lines[#lines + 1] = "|cff88ff88Spec:|r " .. table.concat(typeList, ", ") .. "  |cff888888(" .. specName .. ")|r"
+    else
+        lines[#lines + 1] = "|cffff8888Spec:|r No dispel abilities detected  |cff888888(" .. specName .. ")|r"
+    end
+
+    -- Racial types
+    local racialList = {}
+    for _, info in ipairs(DISPEL_TYPE_INFO) do
+        if racialTypes[info.key] then
+            local r, g, b = info.color[1], info.color[2], info.color[3]
+            racialList[#racialList + 1] = string.format("|cff%02x%02x%02x%s|r", r * 255, g * 255, b * 255, info.label)
+        end
+    end
+    if #racialList > 0 then
+        local _, raceFile = UnitRace("player")
+        local raceName = UnitRace("player") or raceFile or "Unknown"
+        lines[#lines + 1] = "|cff88ff88Racial:|r " .. table.concat(racialList, ", ") .. " (self only)  |cff888888(" .. raceName .. ")|r"
+    end
+
+    return table.concat(lines, "\n")
+end
+
+-- ============================================================================
 -- MAIN PANEL CREATION
 -- ============================================================================
 
@@ -680,7 +748,7 @@ local function CreateOptionsPanel()
     local db = DSA.db
 
     -- Main frame
-    panel = CreateFrame("Frame", "DispelSoundAlertOptions", UIParent, "BackdropTemplate")
+    panel = CreateFrame("Frame", "NT_DispelSoundsOptions", UIParent, "BackdropTemplate")
     panel:SetSize(PANEL_WIDTH, PANEL_HEIGHT)
     panel:SetPoint("CENTER")
     panel:SetBackdrop({
@@ -699,7 +767,7 @@ local function CreateOptionsPanel()
     panel:SetScript("OnDragStop", panel.StopMovingOrSizing)
 
     -- Close on Escape
-    tinsert(UISpecialFrames, "DispelSoundAlertOptions")
+    tinsert(UISpecialFrames, "NT_DispelSoundsOptions")
 
     -- ========================================================================
     -- HEADER
@@ -708,14 +776,12 @@ local function CreateOptionsPanel()
     header:SetHeight(HEADER_HEIGHT)
     header:SetPoint("TOPLEFT", 0, 0)
     header:SetPoint("TOPRIGHT", 0, 0)
-    header:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-    })
+    header:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
     header:SetBackdropColor(unpack(Colors.headerBg))
 
     local title = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("LEFT", 12, 0)
-    title:SetText("|cff00ccffDandersFrames|r_DispelSounds")
+    title:SetText("|cff00ccffNT_DispelSounds|r")
     title:SetTextColor(unpack(Colors.text))
 
     local version = header:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -723,7 +789,6 @@ local function CreateOptionsPanel()
     version:SetText("v" .. ADDON_VERSION)
     version:SetTextColor(unpack(Colors.textMuted))
 
-    -- Close button
     local closeBtn = CreateFrame("Button", nil, header)
     closeBtn:SetSize(HEADER_HEIGHT - 8, HEADER_HEIGHT - 8)
     closeBtn:SetPoint("RIGHT", -6, 0)
@@ -754,7 +819,6 @@ local function CreateOptionsPanel()
     content:SetWidth(PANEL_WIDTH - COL_PADDING * 2)
     scrollFrame:SetScrollChild(content)
 
-    -- Y-cursor for vertical layout
     local yOffset = -COL_PADDING
 
     local function PlaceWidget(widget, extraGap)
@@ -791,21 +855,94 @@ local function CreateOptionsPanel()
         label = "Enable for Party frames",
         get = function() return db.enableParty end,
         set = function(v) db.enableParty = v end,
-        tooltip = "Play sounds when dispellable debuffs appear on party frames.",
+        tooltip = "Play sounds when dispellable debuffs appear on party members.",
     }))
 
     PlaceWidget(CreateCheckbox(content, {
         label = "Enable for Raid frames",
         get = function() return db.enableRaid end,
         set = function(v) db.enableRaid = v end,
-        tooltip = "Play sounds when dispellable debuffs appear on raid frames.",
+        tooltip = "Play sounds when dispellable debuffs appear on raid members.",
     }))
 
+    PlaceWidget(CreateCheckbox(content, {
+        label = "Enable for Player",
+        get = function() return db.enablePlayer end,
+        set = function(v) db.enablePlayer = v end,
+        tooltip = "Play sounds when dispellable debuffs appear on yourself. Includes racial self-dispels in Auto mode.",
+    }))
+
+    -- ========================================================================
+    -- SECTION: Dispel Detection
+    -- ========================================================================
+    PlaceWidget(CreateSectionHeader(content, "Dispel Detection"), SECTION_GAP)
+
+    -- Track manual type checkboxes for enable/disable toggling
+    local manualTypeCheckboxes = {}
+
+    local function UpdateManualCheckboxState()
+        local isManual = db.filterMode == "manual"
+        for _, cb in ipairs(manualTypeCheckboxes) do
+            cb:SetDisabled(not isManual)
+        end
+    end
+
+    PlaceWidget(CreateDropdown(content, {
+        label = "Detection Mode",
+        get = function()
+            return db.filterMode == "auto" and "Automatic" or "Manual"
+        end,
+        set = function(v)
+            db.filterMode = (v == "Automatic") and "auto" or "manual"
+            UpdateManualCheckboxState()
+        end,
+        items = function() return { "Automatic", "Manual" } end,
+        onChange = function()
+            UpdateManualCheckboxState()
+            RefreshAll()
+        end,
+        tooltip = "Automatic: detect dispel types from your class, spec, and racials.\nManual: choose which debuff types trigger alerts.",
+    }))
+
+    PlaceWidget(CreateCheckbox(content, {
+        label = "Include Racial abilities (self only)",
+        get = function() return db.includeRacials end,
+        set = function(v)
+            db.includeRacials = v
+            DSA.MarkAutoDetectDirty()
+        end,
+        tooltip = "In Auto mode, also detect racial self-dispel abilities (e.g. Dwarf Stoneform, Dark Iron Fireblood). These only apply to your own debuffs.",
+    }))
+
+    -- Auto-detect status display
+    local autoStatusText = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    autoStatusText:SetWidth(PANEL_WIDTH - COL_PADDING * 2)
+    autoStatusText:SetJustifyH("LEFT")
+    autoStatusText:SetText(BuildAutoDetectText())
+    PlaceFontString(autoStatusText, 4)
+
     PlaceFontString(CreateInfoText(content,
-        "|cff888888Alerts are based on DandersFrames Debuff Overlay settings. "
-        .. "Recommended: |cffffff00/df > Dispel Overlay > Show Overlay for: Only dispellable by me|r"
-        .. " so this addon alerts only for debuffs you can dispel.|r"
+        "|cff888888Manual type filters below are used when Detection Mode is Manual. "
+        .. "In Automatic mode they are ignored.|r"
     ), 4)
+
+    -- Manual type checkboxes
+    for _, info in ipairs(DISPEL_TYPE_INFO) do
+        local r, g, b = info.color[1], info.color[2], info.color[3]
+        local coloredLabel = string.format("|cff%02x%02x%02x%s|r", r * 255, g * 255, b * 255, info.label)
+
+        local cb = CreateCheckbox(content, {
+            label = coloredLabel,
+            get = function() return db[info.dbKey] end,
+            set = function(v) db[info.dbKey] = v end,
+            tooltip = "Alert for " .. info.label .. " debuffs on group members.",
+        })
+        PlaceWidget(cb)
+        manualTypeCheckboxes[#manualTypeCheckboxes + 1] = cb
+    end
+
+    -- Set initial checkbox state
+    UpdateManualCheckboxState()
 
     -- ========================================================================
     -- SECTION: Sound
@@ -824,7 +961,6 @@ local function CreateOptionsPanel()
         end,
         items = GetSoundList,
         onChange = function()
-            -- Preview the sound
             C_Timer.After(0.05, function() DSA.PlayDispelSound(true) end)
         end,
         tooltip = "Sound to play when a dispellable debuff is detected. Uses LibSharedMedia sounds.",
@@ -924,81 +1060,20 @@ local function CreateOptionsPanel()
         label = "Debug mode (log to chat)",
         get = function() return db.debug end,
         set = function(v) db.debug = v end,
-        tooltip = "Print detailed debug info to chat: debuff detection, overlay state changes, sound playback attempts, cooldown blocks. Also available via /dsa debug.",
+        tooltip = "Print detailed debug info to chat: aura scanning, dispel detection, sound playback attempts, cooldown blocks. Also available via /dsa debug.",
     }))
 
     PlaceFontString(CreateInfoText(content,
-        "|cff888888This addon now listens to DandersFrames' dispel overlay directly. "
-        .. "Debuff type filtering and dispel logic are fully controlled by DandersFrames.|r"
+        "|cff888888This addon scans party/raid unit auras directly using the WoW C_UnitAuras API. "
+        .. "No external frame addon is required.|r"
     ), 4)
 
     -- ========================================================================
-    -- DandersFrames Status
+    -- OnShow: refresh status
     -- ========================================================================
-    PlaceWidget(CreateSectionHeader(content, "DandersFrames Status"), SECTION_GAP)
-
-    local statusText = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    statusText:SetWidth(PANEL_WIDTH - COL_PADDING * 2)
-    statusText:SetJustifyH("LEFT")
-
-    local function UpdateStatus()
-        if not DandersFrames_IsReady or not DandersFrames_IsReady() then
-            statusText:SetText("|cffff4444DandersFrames is not loaded or not ready.|r")
-            return
-        end
-
-        local lines = { "|cff00ff00DandersFrames is loaded and ready.|r" }
-
-        -- Read DF config to show enabled debuff types
-        local partyConfig = DandersFrames_GetPartyConfig and DandersFrames_GetPartyConfig()
-        local dfDB = DandersFramesDB_v2
-        if dfDB then
-            local profileName = dfDB.currentProfile
-            local profile = profileName and dfDB.profiles and dfDB.profiles[profileName]
-            if profile then
-                local partyDb = profile.party
-                local raidDb = profile.raid
-                if partyDb then
-                    local types = {}
-                    if partyDb.dispelOverlayEnabled then
-                        if partyDb.dispelShowMagic ~= false then types[#types + 1] = "|cff3399ffMagic|r" end
-                        if partyDb.dispelShowCurse ~= false then types[#types + 1] = "|cff9900ffCurse|r" end
-                        if partyDb.dispelShowDisease ~= false then types[#types + 1] = "|cff996600Disease|r" end
-                        if partyDb.dispelShowPoison ~= false then types[#types + 1] = "|cff009900Poison|r" end
-                        if partyDb.dispelShowBleed or partyDb.dispelShowEnrage then types[#types + 1] = "|cffff0000Bleed/Enrage|r" end
-                        lines[#lines + 1] = "Party dispel types: " .. (#types > 0 and table.concat(types, ", ") or "|cff888888none|r")
-                        lines[#lines + 1] = "Party mode: " .. (partyDb.dispelOverlayMode or "?")
-                    else
-                        lines[#lines + 1] = "|cffff8800Party dispel overlay is DISABLED in DandersFrames.|r"
-                    end
-                end
-                if raidDb then
-                    local types = {}
-                    if raidDb.dispelOverlayEnabled then
-                        if raidDb.dispelShowMagic ~= false then types[#types + 1] = "|cff3399ffMagic|r" end
-                        if raidDb.dispelShowCurse ~= false then types[#types + 1] = "|cff9900ffCurse|r" end
-                        if raidDb.dispelShowDisease ~= false then types[#types + 1] = "|cff996600Disease|r" end
-                        if raidDb.dispelShowPoison ~= false then types[#types + 1] = "|cff009900Poison|r" end
-                        if raidDb.dispelShowBleed or raidDb.dispelShowEnrage then types[#types + 1] = "|cffff0000Bleed/Enrage|r" end
-                        lines[#lines + 1] = "Raid dispel types: " .. (#types > 0 and table.concat(types, ", ") or "|cff888888none|r")
-                        lines[#lines + 1] = "Raid mode: " .. (raidDb.dispelOverlayMode or "?")
-                    else
-                        lines[#lines + 1] = "|cffff8800Raid dispel overlay is DISABLED in DandersFrames.|r"
-                    end
-                end
-            end
-        end
-
-        lines[#lines + 1] = "Dispel alerts are driven by DandersFrames overlay visibility."
-
-        statusText:SetText(table.concat(lines, "\n"))
-    end
-
-    PlaceFontString(statusText, 0)
-
-    -- Update status on show
     panel:SetScript("OnShow", function()
-        UpdateStatus()
+        autoStatusText:SetText(BuildAutoDetectText())
+        UpdateManualCheckboxState()
         RefreshAll()
     end)
 
@@ -1055,17 +1130,18 @@ local function CreateOptionsPanel()
         StaticPopup_Show("DSA_RESET_CONFIRM")
     end)
 
-    -- Confirm dialog for reset
     StaticPopupDialogs["DSA_RESET_CONFIRM"] = {
-        text = "Reset Dispel Sound Alert to default settings?",
+        text = "Reset NT_DispelSounds to default settings?",
         button1 = "Reset",
         button2 = "Cancel",
         OnAccept = function()
             for k, v in pairs(DSA.DEFAULTS) do
                 db[k] = v
             end
+            DSA.MarkAutoDetectDirty()
+            autoStatusText:SetText(BuildAutoDetectText())
+            UpdateManualCheckboxState()
             RefreshAll()
-            UpdateStatus()
         end,
         timeout = 0,
         whileDead = true,
@@ -1095,20 +1171,17 @@ end
 -- ============================================================================
 
 local function RegisterSettings()
-    local category = Settings.RegisterCanvasLayoutCategory(CreateOptionsPanel(), "Dispel Sound Alert")
-    category.ID = "DispelSoundAlert"
+    local category = Settings.RegisterCanvasLayoutCategory(CreateOptionsPanel(), ADDON_DISPLAY_NAME)
+    category.ID = "NT_DispelSounds"
     Settings.RegisterAddOnCategory(category)
     DSA.settingsCategory = category
 end
 
--- Wait for DF to be ready, then register
 local settingsFrame = CreateFrame("Frame")
 settingsFrame:RegisterEvent("PLAYER_LOGIN")
 settingsFrame:SetScript("OnEvent", function(self, event)
     self:UnregisterEvent(event)
-    -- Defer slightly to ensure saved variables are loaded
     C_Timer.After(0.1, function()
-        -- Direct panel creation registration
         local ok, err = pcall(RegisterSettings)
         if not ok then
             -- Fallback: just use slash command
