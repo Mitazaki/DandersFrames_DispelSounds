@@ -366,13 +366,9 @@ local function ScanUnitForDispellableDebuffs(unit)
 
         -- For the player unit: also check racial self-dispel
         -- Racials can remove types the spec cannot (e.g. bleeds for Dwarves)
+        -- Racial cooldown is always checked directly (trackable via Blizzard API)
         if isPlayer and autoRacialSpellID then
-            local racialReady = true
-            if checkCooldowns then
-                racialReady = IsRacialDispelReady()
-            end
-
-            if racialReady then
+            if IsRacialDispelReady() then
                 for i = 1, 40 do
                     local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
                     if not auraData then break end
