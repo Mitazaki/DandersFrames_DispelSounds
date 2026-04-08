@@ -718,12 +718,6 @@ local function BuildAutoDetectText()
         lines[#lines + 1] = "|cffff8888Spec:|r No dispel abilities detected  |cff888888(" .. specName .. ")|r"
     end
 
-    -- Racial info
-    if DSA.HasRacialDispel() then
-        local raceName = UnitRace("player") or "Unknown"
-        lines[#lines + 1] = "|cff88ff88Racial:|r Available  |cff888888(" .. raceName .. " — self only, separate sound)|r"
-    end
-
     return table.concat(lines, "\n")
 end
 
@@ -860,7 +854,7 @@ local function CreateOptionsPanel()
         label = "Enable for Player",
         get = function() return db.enablePlayer end,
         set = function(v) db.enablePlayer = v end,
-        tooltip = "Play sounds when dispellable debuffs appear on yourself. Includes racial self-dispel alerts.",
+        tooltip = "Play sounds when dispellable debuffs appear on yourself.",
     }))
 
     -- ========================================================================
@@ -880,14 +874,14 @@ local function CreateOptionsPanel()
         onChange = function()
             RefreshAll()
         end,
-        tooltip = "Dispellable by Me: alerts only for debuffs your class/spec can remove. Also alerts for racial self-dispel on the player unit.\n\nAll Dispellable: alerts for any dispellable debuff on any group member.",
+        tooltip = "Dispellable by Me: alerts only for debuffs your class/spec can remove.\n\nAll Dispellable: alerts for any dispellable debuff on any group member.",
     }))
 
     PlaceWidget(CreateCheckbox(content, {
         label = "Only alert when ability is ready",
         get = function() return db.onlyWhenReady end,
         set = function(v) db.onlyWhenReady = v end,
-        tooltip = "Only play the spec dispel alert when your class/spec ability is off cooldown. Does not affect racial alerts — racial cooldown cannot be tracked in combat.",
+        tooltip = "Only play the alert when your class/spec dispel ability is off cooldown. Ignores the GCD. Re-scans when the ability comes off cooldown.",
     }))
 
     -- Auto-detect status display
@@ -956,54 +950,6 @@ local function CreateOptionsPanel()
     end)
 
     PlaceWidget(testBtn)
-
-    -- Racial Sound (self-dispel alert)
-    PlaceWidget(CreateDropdown(content, {
-        label = "Racial Alert Sound (self only)",
-        get = function() return db.racialSoundFile or DEFAULT_SOUND_LABEL end,
-        set = function(v)
-            if v == DEFAULT_SOUND_LABEL then
-                db.racialSoundFile = nil
-            else
-                db.racialSoundFile = v
-            end
-        end,
-        items = GetSoundList,
-        onChange = function()
-            C_Timer.After(0.05, function() DSA.PlayRacialSound(true) end)
-        end,
-        tooltip = "Sound to play when a racial-dispellable debuff is detected on yourself (e.g. Stoneform, Fireblood). Uses the main sound if not set.",
-    }))
-
-    -- Test racial sound button
-    local testRacialBtn = CreateFrame("Button", nil, content, "BackdropTemplate")
-    testRacialBtn:SetSize(130, 24)
-    testRacialBtn:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
-    })
-    testRacialBtn:SetBackdropColor(unpack(Colors.btnBg))
-    testRacialBtn:SetBackdropBorderColor(unpack(Colors.btnBorder))
-
-    local testRacialBtnText = testRacialBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    testRacialBtnText:SetPoint("CENTER")
-    testRacialBtnText:SetText("Test Racial Sound")
-    testRacialBtnText:SetTextColor(unpack(Colors.text))
-
-    testRacialBtn:SetScript("OnEnter", function()
-        testRacialBtn:SetBackdropColor(unpack(Colors.btnBgHover))
-        testRacialBtn:SetBackdropBorderColor(unpack(Colors.btnBorderHov))
-    end)
-    testRacialBtn:SetScript("OnLeave", function()
-        testRacialBtn:SetBackdropColor(unpack(Colors.btnBg))
-        testRacialBtn:SetBackdropBorderColor(unpack(Colors.btnBorder))
-    end)
-    testRacialBtn:SetScript("OnClick", function()
-        DSA.PlayRacialSound(true)
-    end)
-
-    PlaceWidget(testRacialBtn)
 
     -- ========================================================================
     -- SECTION: Timing

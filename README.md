@@ -7,7 +7,6 @@ Standalone addon that plays an alert sound when a dispellable debuff is detected
 - Plays a sound when a dispellable debuff appears on a group member
 - **Dispellable by Me** — only alerts for debuffs your class/spec can remove, updates automatically when you change specs
 - **All Dispellable** — alerts for any dispellable debuff on any group member
-- Racial self-dispel alerts (Dwarf Stoneform, Dark Iron Dwarf Fireblood) with a separate sound option
 - Cooldown awareness — optionally only alerts when your dispel ability is off cooldown
 - Re-alerts when your ability comes off cooldown if a debuff is still present
 - Per-unit and global cooldowns to reduce spam
@@ -20,7 +19,7 @@ Standalone addon that plays an alert sound when a dispellable debuff is detected
 
 ### Dispellable by Me
 
-Alerts only for debuffs you can actually remove with your current class and spec. For the player unit, it also checks for racial self-dispel opportunities.
+Alerts only for debuffs you can actually remove with your current class and spec.
 
 | Class | Spec | Dispel Types |
 |-------|------|-------------|
@@ -37,15 +36,6 @@ Alerts only for debuffs you can actually remove with your current class and spec
 | Druid | Restoration | Magic, Curse, Poison |
 | Evoker | Devastation, Augmentation | Poison, Disease, Curse, Bleed |
 | Evoker | Preservation | Magic, Poison, Disease, Curse, Bleed |
-
-### Racial Self-Dispel
-
-On the player unit, the addon automatically detects racial dispel abilities and plays a separate sound when a debuff can be removed by your racial and it's off cooldown.
-
-| Race | Ability | Types |
-|------|---------|-------|
-| Dwarf | Stoneform | Poison, Disease, Bleed |
-| Dark Iron Dwarf | Fireblood | Poison, Disease, Curse, Bleed, Magic |
 
 ### All Dispellable
 
@@ -80,7 +70,7 @@ Place the addon folder in:
 
 **Dispel Detection** — Choose detection mode and cooldown awareness.
 
-**Sound** — Select alert sound and channel. Separate sound for racial alerts.
+**Sound** — Select alert sound and channel.
 
 **Timing** — Per-unit and global cooldowns.
 
