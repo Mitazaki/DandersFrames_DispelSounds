@@ -5,7 +5,7 @@
 
 local addonName, DSA = ...
 local ADDON_DISPLAY_NAME = "NT_DispelSounds"
-local ADDON_VERSION = "2.0.0"
+local ADDON_VERSION = "0.9.0b"
 
 -- ============================================================================
 -- DEFAULTS
@@ -13,11 +13,10 @@ local ADDON_VERSION = "2.0.0"
 
 local DEFAULTS = {
     enabled = true,
-    enableParty = true,
-    enableRaid = true,
-    enablePlayer = true,
+    enableRoleHealer = true,
+    enableRoleDPS = true,
+    enableRoleTank = true,
     filterMode = "auto",
-    onlyWhenReady = true,
     soundFile = nil,
     soundChannel = "Master",
     cooldownPerUnit = 3,
@@ -25,104 +24,11 @@ local DEFAULTS = {
     repeatSound = false,
     repeatInterval = 5,
     debug = false,
-    changelogDismissed = nil,
 }
 
 DSA.DEFAULTS = DEFAULTS
 DSA.ADDON_DISPLAY_NAME = ADDON_DISPLAY_NAME
 DSA.ADDON_VERSION = ADDON_VERSION
-
--- ============================================================================
--- DISPEL CAPABILITY TABLES
--- ============================================================================
-
--- classID -> specID -> { dispel types removable from friendlies }
-local CLASS_SPEC_DISPELS = {
-    [2] = { -- Paladin
-        [65]  = {"Magic", "Poison", "Disease"},      -- Holy (Cleanse)
-        [66]  = {"Poison", "Disease"},               -- Protection (Cleanse Toxins)
-        [70]  = {"Poison", "Disease"},               -- Retribution (Cleanse Toxins)
-    },
-    [5] = { -- Priest
-        [256] = {"Magic", "Disease"},                -- Discipline (Purify)
-        [257] = {"Magic", "Disease"},                -- Holy (Purify)
-        [258] = {"Disease"},                         -- Shadow (Purify Disease)
-    },
-    [7] = { -- Shaman
-        [262] = {"Curse"},                           -- Elemental (Cleanse Spirit)
-        [263] = {"Curse"},                           -- Enhancement (Cleanse Spirit)
-        [264] = {"Magic", "Curse"},                  -- Restoration (Purify Spirit)
-    },
-    [8] = { -- Mage
-        [62]  = {"Curse"},                           -- Arcane (Remove Curse)
-        [63]  = {"Curse"},                           -- Fire (Remove Curse)
-        [64]  = {"Curse"},                           -- Frost (Remove Curse)
-    },
-    [10] = { -- Monk
-        [268] = {"Poison", "Disease"},               -- Brewmaster (Detox)
-        [269] = {"Poison", "Disease"},               -- Windwalker (Detox)
-        [270] = {"Magic", "Poison", "Disease"},      -- Mistweaver (Detox)
-    },
-    [11] = { -- Druid
-        [102] = {"Curse", "Poison"},                 -- Balance (Remove Corruption)
-        [103] = {"Curse", "Poison"},                 -- Feral (Remove Corruption)
-        [104] = {"Curse", "Poison"},                 -- Guardian (Remove Corruption)
-        [105] = {"Magic", "Curse", "Poison"},        -- Restoration (Nature's Cure)
-    },
-    [13] = { -- Evoker
-        [1467] = {"Poison", "Disease", "Curse", "Bleed"},           -- Devastation (Cauterizing Flame)
-        [1468] = {"Magic", "Poison", "Disease", "Curse", "Bleed"},  -- Preservation (Naturalize + Cauterizing Flame)
-        [1473] = {"Poison", "Disease", "Curse", "Bleed"},           -- Augmentation (Cauterizing Flame)
-    },
-}
-
--- classID -> specID -> { spellID, ... } (the actual dispel spells to check cooldowns on)
-local CLASS_SPEC_DISPEL_SPELLS = {
-    [2] = { -- Paladin
-        [65]  = { 4987 },           -- Cleanse
-        [66]  = { 213644 },         -- Cleanse Toxins
-        [70]  = { 213644 },         -- Cleanse Toxins
-    },
-    [5] = { -- Priest
-        [256] = { 527 },            -- Purify
-        [257] = { 527 },            -- Purify
-        [258] = { 213634 },         -- Purify Disease
-    },
-    [7] = { -- Shaman
-        [262] = { 51886 },          -- Cleanse Spirit
-        [263] = { 51886 },          -- Cleanse Spirit
-        [264] = { 77130 },          -- Purify Spirit
-    },
-    [8] = { -- Mage
-        [62]  = { 475 },            -- Remove Curse
-        [63]  = { 475 },            -- Remove Curse
-        [64]  = { 475 },            -- Remove Curse
-    },
-    [10] = { -- Monk
-        [268] = { 218164 },         -- Detox
-        [269] = { 218164 },         -- Detox
-        [270] = { 115450 },         -- Detox (Mistweaver)
-    },
-    [11] = { -- Druid
-        [102] = { 2782 },           -- Remove Corruption
-        [103] = { 2782 },           -- Remove Corruption
-        [104] = { 2782 },           -- Remove Corruption
-        [105] = { 88423 },          -- Nature's Cure
-    },
-    [13] = { -- Evoker
-        [1467] = { 374251 },        -- Cauterizing Flame
-        [1468] = { 374251, 360823 },-- Cauterizing Flame + Naturalize
-        [1473] = { 374251 },        -- Cauterizing Flame
-    },
-}
-
--- dispelName string (from aura data) -> our key
-local DISPEL_NAME_TO_KEY = {
-    ["Magic"]   = "Magic",
-    ["Curse"]   = "Curse",
-    ["Disease"] = "Disease",
-    ["Poison"]  = "Poison",
-}
 
 -- ============================================================================
 -- STATE
@@ -134,10 +40,6 @@ local unitCooldowns = {}
 local lastGlobalSound = 0
 local repeatTimers = {}
 local LSM
-
-local autoDispelTypes = {}
-local autoDispelSpells = {}
-local autoDetectDirty = true
 
 local PREFIX = "|cff00ccffDSA|r"
 
@@ -162,132 +64,6 @@ local function GetLSM()
 end
 
 -- ============================================================================
--- COOLDOWN CHECK
--- ============================================================================
-
-local function IsSpellReady(spellID)
-    if not spellID then return false end
-
-    -- Try C_Spell.GetSpellCooldown first — works in combat, returns nil if spell unknown
-    local cooldownInfo = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(spellID)
-    if cooldownInfo then
-        if cooldownInfo.duration == 0 then
-            return true
-        end
-        local remaining = (cooldownInfo.startTime + cooldownInfo.duration) - GetTime()
-        if remaining <= 0 then
-            return true
-        end
-        -- GCD (typically 1.5s or less) should not block alerts
-        if cooldownInfo.duration <= 1.5 then
-            return true
-        end
-        DebugPrint("|cffff8888Cooldown:|r spell " .. spellID .. " on CD (" .. string.format("%.1f", remaining) .. "s remaining)")
-        return false
-    end
-
-    -- Fallback to old API (pre-11.0)
-    if GetSpellCooldown then
-        local start, duration = GetSpellCooldown(spellID)
-        if start and duration then
-            if duration == 0 then return true end
-            local remaining = (start + duration) - GetTime()
-            if remaining <= 0 then return true end
-            if duration <= 1.5 then return true end
-            DebugPrint("|cffff8888Cooldown:|r spell " .. spellID .. " on CD (" .. string.format("%.1f", remaining) .. "s remaining)")
-            return false
-        end
-    end
-
-    -- Neither API returned data — check if player even has this spell
-    if IsPlayerSpell and IsPlayerSpell(spellID) then
-        return true  -- Has the spell, assume ready (API might not be available yet)
-    end
-
-    DebugPrint("|cffff8888Cooldown:|r spell " .. spellID .. " not found via any API")
-    return false
-end
-
-local function IsAnyDispelSpellReady()
-    for _, spellID in ipairs(autoDispelSpells) do
-        if IsSpellReady(spellID) then
-            return true
-        end
-    end
-    return false
-end
-
--- ============================================================================
--- AUTO-DETECT
--- ============================================================================
-
-local function UpdateAutoDetect()
-    wipe(autoDispelTypes)
-    wipe(autoDispelSpells)
-
-    local _, _, classID = UnitClass("player")
-    local specIndex = GetSpecialization()
-    local specID = specIndex and GetSpecializationInfo(specIndex) or nil
-
-    if classID and CLASS_SPEC_DISPELS[classID] then
-        local specTable = specID and CLASS_SPEC_DISPELS[classID][specID]
-        if specTable then
-            for _, t in ipairs(specTable) do
-                autoDispelTypes[t] = true
-            end
-        end
-    end
-
-    -- Collect dispel spell IDs for cooldown tracking
-    if classID and CLASS_SPEC_DISPEL_SPELLS[classID] then
-        local spellTable = specID and CLASS_SPEC_DISPEL_SPELLS[classID][specID]
-        if spellTable then
-            for _, sid in ipairs(spellTable) do
-                autoDispelSpells[#autoDispelSpells + 1] = sid
-            end
-        end
-    end
-
-    autoDetectDirty = false
-
-    if db and db.debug then
-        local types = {}
-        for t in pairs(autoDispelTypes) do types[#types + 1] = t end
-        DebugPrint("|cff88ff88Auto-detect:|r spec types = {" .. table.concat(types, ", ") .. "}")
-        local spells = {}
-        for _, sid in ipairs(autoDispelSpells) do spells[#spells + 1] = tostring(sid) end
-        DebugPrint("|cff88ff88Auto-detect:|r dispel spells = {" .. table.concat(spells, ", ") .. "}")
-    end
-end
-
-DSA.UpdateAutoDetect = UpdateAutoDetect
-
-function DSA.GetAutoDetectedTypes()
-    if autoDetectDirty then UpdateAutoDetect() end
-    return autoDispelTypes
-end
-
-function DSA.MarkAutoDetectDirty()
-    autoDetectDirty = true
-end
-
--- ============================================================================
--- DISPEL TYPE FILTER (informational — used for auto-detect display only)
--- ============================================================================
-
-local function IsDispelTypeEnabled(dispelType, unit)
-    if not dispelType then return false end
-
-    if db.filterMode == "auto" then
-        if autoDetectDirty then UpdateAutoDetect() end
-        if autoDispelTypes[dispelType] then return true end
-        return false
-    else
-        return true
-    end
-end
-
--- ============================================================================
 -- AURA SCANNING
 -- Returns: true or false
 -- ============================================================================
@@ -298,47 +74,35 @@ local function ScanUnitForDispellableDebuffs(unit)
     if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return false end
     if not UnitExists(unit) then return false end
 
-    if autoDetectDirty then UpdateAutoDetect() end
-
     if db.filterMode == "auto" then
-        local IsAuraFilteredOut = C_UnitAuras.IsAuraFilteredOut
+        -- "Dispellable by Me": use RAID_PLAYER_DISPELLABLE filter (same as DandersFrames)
+        local IsFiltered = C_UnitAuras.IsAuraFilteredOutByInstanceID
 
-        -- Check spec dispel cooldown if enabled
-        if db.onlyWhenReady and #autoDispelSpells > 0 then
-            if not IsAnyDispelSpellReady() then
-                DebugPrint("|cffff8888Scan " .. unit .. ":|r dispel on cooldown")
-                return false
-            end
-        end
+        for i = 1, 40 do
+            local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
+            if not auraData then break end
 
-        -- Spec dispel check via RAID_PLAYER_DISPELLABLE
-        if IsAuraFilteredOut then
-            for i = 1, 40 do
-                local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
-                if not auraData then break end
-
-                local id = auraData.auraInstanceID
-                if id and not IsAuraFilteredOut(unit, id, FILTER_PLAYER_DISPELLABLE) then
-                    DebugPrint("|cff88ff88Scan " .. unit .. ":|r dispellable aura (id=" .. id .. ")")
-                    return true
-                end
-            end
-        elseif next(autoDispelTypes) ~= nil then
-            -- Fallback if IsAuraFilteredOut unavailable
-            for i = 1, 40 do
-                local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
-                if not auraData then break end
-
-                if auraData.dispelName ~= nil then
-                    DebugPrint("|cff88ff88Scan " .. unit .. ":|r dispellable aura found (fallback)")
-                    return true
+            local id = auraData.auraInstanceID
+            if id then
+                if IsFiltered then
+                    if not IsFiltered(unit, id, FILTER_PLAYER_DISPELLABLE) then
+                        DebugPrint("|cff88ff88Scan " .. unit .. ":|r player-dispellable aura (id=" .. id .. ")")
+                        return true
+                    end
+                else
+                    -- Fallback: if API unavailable, treat any standard-dispellable as player-dispellable
+                    local dn = auraData.dispelName
+                    if dn == "Magic" or dn == "Curse" or dn == "Disease" or dn == "Poison" then
+                        DebugPrint("|cff88ff88Scan " .. unit .. ":|r dispellable aura found (fallback, id=" .. id .. ")")
+                        return true
+                    end
                 end
             end
         end
 
         return false
     else
-        -- All Dispellable mode: alert for any harmful aura with a dispel type
+        -- "All Dispellable": alert for any harmful aura with a dispel type
         for i = 1, 40 do
             local auraData = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
             if not auraData then break end
@@ -513,12 +277,39 @@ end
 -- UNIT PROCESSING
 -- ============================================================================
 
+local function GetPlayerRole()
+    local specIndex = GetSpecialization()
+    if specIndex then
+        local role = GetSpecializationRole(specIndex)
+        if role and role ~= "NONE" then
+            return role
+        end
+    end
+    return "NONE"
+end
+
+local function IsPlayerRoleEnabled()
+    local role = GetPlayerRole()
+    if role == "HEALER" then return db.enableRoleHealer end
+    if role == "DAMAGER" then return db.enableRoleDPS end
+    if role == "TANK" then return db.enableRoleTank end
+    return true -- NONE or unknown: always alert
+end
+
 local function ProcessUnit(unit)
     if not db or not db.enabled then return end
     if not UnitExists(unit) then return end
 
     local guid = UnitGUID(unit)
     if not guid then return end
+
+    if not IsPlayerRoleEnabled() then
+        if dispelState[guid] then
+            dispelState[guid] = false
+            StopRepeat(guid)
+        end
+        return
+    end
 
     local scanResult = ScanUnitForDispellableDebuffs(unit)
 
@@ -540,9 +331,9 @@ end
 
 local function IsRelevantUnit(unit)
     if not unit then return false end
-    if unit == "player" then return db.enablePlayer end
-    if unit:match("^party%d") then return db.enableParty end
-    if unit:match("^raid%d") then return db.enableRaid end
+    if unit == "player" then return true end
+    if unit:match("^party%d") then return true end
+    if unit:match("^raid%d") then return true end
     return false
 end
 
@@ -553,25 +344,19 @@ end
 local function ScanAllUnits()
     if not db or not db.enabled then return end
 
-    if db.enablePlayer then
-        ProcessUnit("player")
-    end
+    ProcessUnit("player")
 
     local numGroup = GetNumGroupMembers()
     if numGroup == 0 then return end
 
     local inRaid = IsInRaid()
     if inRaid then
-        if db.enableRaid then
-            for i = 1, numGroup do
-                ProcessUnit("raid" .. i)
-            end
+        for i = 1, numGroup do
+            ProcessUnit("raid" .. i)
         end
     else
-        if db.enableParty then
-            for i = 1, numGroup - 1 do
-                ProcessUnit("party" .. i)
-            end
+        for i = 1, numGroup - 1 do
+            ProcessUnit("party" .. i)
         end
     end
 end
@@ -611,7 +396,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
         local name = ...
         if name == addonName then
-            -- Migrate from old DispelSoundAlertDB if NT_DispelSoundsDB doesn't exist yet
+            -- Migrate from old DispelSoundAlertDB
             if not NT_DispelSoundsDB and DispelSoundAlertDB then
                 NT_DispelSoundsDB = DispelSoundAlertDB
                 DispelSoundAlertDB = nil
@@ -621,62 +406,64 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
                 NT_DispelSoundsDB = {}
             end
 
+            -- Convert flat settings to profile structure
+            if not NT_DispelSoundsDB.profiles then
+                -- Legacy key migrations
+                if NT_DispelSoundsDB.soundName and not NT_DispelSoundsDB.soundFile then
+                    NT_DispelSoundsDB.soundFile = NT_DispelSoundsDB.soundName
+                end
+                if NT_DispelSoundsDB.filterMode == "manual" then
+                    NT_DispelSoundsDB.filterMode = "all"
+                end
+
+                -- Collect valid settings (only DEFAULTS keys, ignore legacy)
+                local settings = {}
+                for k, v in pairs(DEFAULTS) do
+                    settings[k] = (NT_DispelSoundsDB[k] ~= nil) and NT_DispelSoundsDB[k] or v
+                end
+
+                NT_DispelSoundsDB = {
+                    profiles = { ["Default"] = settings },
+                    activeProfile = "Default",
+                }
+            end
+
+            -- Ensure active profile is valid
+            local ap = NT_DispelSoundsDB.activeProfile or "Default"
+            if not NT_DispelSoundsDB.profiles[ap] then
+                ap = next(NT_DispelSoundsDB.profiles) or "Default"
+                NT_DispelSoundsDB.activeProfile = ap
+            end
+            if not NT_DispelSoundsDB.profiles[ap] then
+                NT_DispelSoundsDB.profiles[ap] = {}
+            end
+
+            -- Apply defaults to active profile
             for k, v in pairs(DEFAULTS) do
-                if NT_DispelSoundsDB[k] == nil then
-                    NT_DispelSoundsDB[k] = v
+                if NT_DispelSoundsDB.profiles[ap][k] == nil then
+                    NT_DispelSoundsDB.profiles[ap][k] = v
                 end
             end
 
-            -- Migrate legacy keys from old DandersFrames-dependent version
-            if NT_DispelSoundsDB.soundName and not NT_DispelSoundsDB.soundFile then
-                NT_DispelSoundsDB.soundFile = NT_DispelSoundsDB.soundName
-                NT_DispelSoundsDB.soundName = nil
-            end
-            NT_DispelSoundsDB.onlyPlayerDispellable = nil
-            NT_DispelSoundsDB.racialEnabled = nil
-            NT_DispelSoundsDB.racialSoundName = nil
-            NT_DispelSoundsDB.racialSoundChannel = nil
-            NT_DispelSoundsDB.racialCooldown = nil
-            NT_DispelSoundsDB.racialOnlyOffCooldown = nil
-            NT_DispelSoundsDB.racialSoundFile = nil
-
-            -- Clean up removed options
-            NT_DispelSoundsDB.includeRacials = nil
-            NT_DispelSoundsDB.filterMagic = nil
-            NT_DispelSoundsDB.filterCurse = nil
-            NT_DispelSoundsDB.filterDisease = nil
-            NT_DispelSoundsDB.filterPoison = nil
-            NT_DispelSoundsDB.filterBleed = nil
-            NT_DispelSoundsDB.filterEnrage = nil
-
-            -- Migrate old "manual" mode to "all"
-            if NT_DispelSoundsDB.filterMode == "manual" then
-                NT_DispelSoundsDB.filterMode = "all"
-            end
-
-            db = NT_DispelSoundsDB
+            db = NT_DispelSoundsDB.profiles[ap]
             DSA.db = db
 
             self:RegisterEvent("UNIT_AURA")
             self:RegisterEvent("GROUP_ROSTER_UPDATE")
             self:RegisterEvent("PLAYER_ENTERING_WORLD")
             self:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
-            self:RegisterEvent("SPELL_UPDATE_COOLDOWN")
 
             self:UnregisterEvent("ADDON_LOADED")
         end
 
     elseif event == "PLAYER_LOGIN" then
-        UpdateAutoDetect()
         print("|cff00ccff" .. ADDON_DISPLAY_NAME .. "|r |cff888888v" .. ADDON_VERSION .. "|r loaded. Use |cffffff00/dsa|r to open options.")
         C_Timer.After(2, ScanAllUnits)
-
-        -- Show changelog popup if not dismissed
-        if db and db.changelogDismissed ~= ADDON_VERSION then
-            C_Timer.After(3, function()
-                DSA:ShowChangelog()
-            end)
-        end
+        C_Timer.After(1, function()
+            if NT_DispelSoundsDB and NT_DispelSoundsDB.changelogDismissedVersion ~= ADDON_VERSION and DSA.ShowChangelogPopup then
+                DSA:ShowChangelogPopup()
+            end
+        end)
 
     elseif event == "UNIT_AURA" then
         local unit = ...
@@ -698,38 +485,12 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         C_Timer.After(1, ScanAllUnits)
 
     elseif event == "PLAYER_SPECIALIZATION_CHANGED" then
-        autoDetectDirty = true
-        DebugPrint("|cffffff00Spec changed:|r re-detecting dispel types")
+        DebugPrint("|cffffff00Spec changed:|r resetting dispel state")
         C_Timer.After(0.5, function()
-            UpdateAutoDetect()
             wipe(dispelState)
             StopAllRepeats()
             ScanAllUnits()
         end)
-
-    elseif event == "SPELL_UPDATE_COOLDOWN" then
-        -- When a dispel comes off cooldown, re-scan to catch debuffs we missed
-        if db and db.enabled and db.onlyWhenReady then
-            ScheduleBatch()
-            -- Queue player unit for re-check
-            if db.enablePlayer then
-                pendingUnits["player"] = true
-            end
-            -- Queue current group for re-check
-            local numGroup = GetNumGroupMembers()
-            if numGroup > 0 then
-                if IsInRaid() and db.enableRaid then
-                    for i = 1, numGroup do
-                        pendingUnits["raid" .. i] = true
-                    end
-                elseif db.enableParty then
-                    for i = 1, numGroup - 1 do
-                        pendingUnits["party" .. i] = true
-                    end
-                end
-            end
-            ScheduleBatch()
-        end
     end
 end)
 
@@ -748,23 +509,8 @@ SlashCmdList["DISPELSOUNDALERT"] = function(msg)
         db.debug = not db.debug
         print("|cff00ccff" .. ADDON_DISPLAY_NAME .. ":|r Debug " .. (db.debug and "|cff00ff00ENABLED|r" or "|cffff0000DISABLED|r"))
         if db.debug then
-            UpdateAutoDetect()
             print("  Enabled: " .. tostring(db.enabled))
             print("  Mode: " .. tostring(db.filterMode))
-            print("  Only when ready: " .. tostring(db.onlyWhenReady))
-            local types = {}
-            for t in pairs(autoDispelTypes) do types[#types + 1] = t end
-            print("  Auto-detected types: " .. (#types > 0 and table.concat(types, ", ") or "(none)"))
-            local spells = {}
-            for _, sid in ipairs(autoDispelSpells) do
-                local ready = IsSpellReady(sid) and "|cff00ff00READY|r" or "|cffff0000NOT READY|r"
-                local known = (IsPlayerSpell and IsPlayerSpell(sid)) and "known" or "unknown"
-                spells[#spells + 1] = tostring(sid) .. " (" .. ready .. ", " .. known .. ")"
-                spells[#spells + 1] = tostring(sid) .. " (" .. ready .. ")"
-            end
-            if #spells > 0 then
-                print("  Dispel spells: " .. table.concat(spells, ", "))
-            end
             local lsm = GetLSM()
             print("  LSM loaded: " .. tostring(lsm ~= nil))
             print("  Sound: " .. tostring(db.soundFile or "(default)"))
@@ -772,19 +518,15 @@ SlashCmdList["DISPELSOUNDALERT"] = function(msg)
     elseif msg == "status" then
         print("|cff00ccff" .. ADDON_DISPLAY_NAME .. ":|r Status:")
         print("  Enabled: " .. (db.enabled and "|cff00ff00YES|r" or "|cffff0000NO|r"))
-        print("  Party: " .. (db.enableParty and "|cff00ff00YES|r" or "|cffff0000NO|r"))
-        print("  Raid: " .. (db.enableRaid and "|cff00ff00YES|r" or "|cffff0000NO|r"))
-        print("  Player: " .. (db.enablePlayer and "|cff00ff00YES|r" or "|cffff0000NO|r"))
+
+        print("  Roles: Healer=" .. (db.enableRoleHealer and "|cff00ff00YES|r" or "|cffff0000NO|r")
+            .. " DPS=" .. (db.enableRoleDPS and "|cff00ff00YES|r" or "|cffff0000NO|r")
+            .. " Tank=" .. (db.enableRoleTank and "|cff00ff00YES|r" or "|cffff0000NO|r"))
         print("  Mode: " .. tostring(db.filterMode))
-        print("  Only when ready: " .. (db.onlyWhenReady and "|cff00ff00YES|r" or "|cffff0000NO|r"))
         if db.filterMode == "auto" then
-            UpdateAutoDetect()
-            local types = {}
-            for t in pairs(autoDispelTypes) do types[#types + 1] = t end
-            print("  Detected types: " .. (#types > 0 and table.concat(types, ", ") or "(none - no spec?)"))
-            print("  Dispel ready: " .. (IsAnyDispelSpellReady() and "|cff00ff00YES|r" or "|cffff0000NO|r"))
+            print("  Dispellable by Me: uses RAID_PLAYER_DISPELLABLE filter")
         else
-            print("  All Dispellable mode: alerts for any dispellable debuff")
+            print("  All Dispellable: alerts for any dispellable debuff")
         end
         print("  Sound: " .. tostring(db.soundFile or "(default)"))
         print("  Channel: " .. tostring(db.soundChannel))
@@ -815,182 +557,76 @@ SlashCmdList["DISPELSOUNDALERT"] = function(msg)
 end
 
 -- ============================================================================
--- CHANGELOG POPUP
+-- PROFILE MANAGEMENT
 -- ============================================================================
 
-local changelogFrame = nil
-
-function DSA:ShowChangelog()
-    if changelogFrame then
-        changelogFrame:Show()
-        return
+function DSA.GetProfileList()
+    local list = {}
+    for name in pairs(NT_DispelSoundsDB.profiles) do
+        list[#list + 1] = name
     end
+    table.sort(list)
+    return list
+end
 
-    local WIDTH = 440
-    local HEIGHT = 420
+function DSA.GetActiveProfile()
+    return NT_DispelSoundsDB.activeProfile
+end
 
-    local f = CreateFrame("Frame", "NT_DispelSoundsChangelog", UIParent, "BackdropTemplate")
-    f:SetSize(WIDTH, HEIGHT)
-    f:SetPoint("CENTER")
-    f:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
-    })
-    f:SetBackdropColor(0.08, 0.08, 0.08, 0.97)
-    f:SetBackdropBorderColor(0.25, 0.25, 0.25, 1)
-    f:SetFrameStrata("FULLSCREEN_DIALOG")
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:SetClampedToScreen(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
-
-    tinsert(UISpecialFrames, "NT_DispelSoundsChangelog")
-
-    -- Header
-    local header = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    header:SetHeight(36)
-    header:SetPoint("TOPLEFT", 0, 0)
-    header:SetPoint("TOPRIGHT", 0, 0)
-    header:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-    header:SetBackdropColor(0.12, 0.12, 0.12, 1)
-
-    local title = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("LEFT", 12, 0)
-    title:SetText("|cff00ccffNT_DispelSounds|r  |cff888888v" .. ADDON_VERSION .. "|r")
-
-    -- Close button
-    local closeBtn = CreateFrame("Button", nil, header)
-    closeBtn:SetSize(28, 28)
-    closeBtn:SetPoint("RIGHT", -6, 0)
-    local closeTex = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    closeTex:SetPoint("CENTER")
-    closeTex:SetText("x")
-    closeTex:SetTextColor(0.7, 0.7, 0.7, 1)
-    closeBtn:SetScript("OnEnter", function() closeTex:SetTextColor(1, 0.3, 0.3, 1) end)
-    closeBtn:SetScript("OnLeave", function() closeTex:SetTextColor(0.7, 0.7, 0.7, 1) end)
-    closeBtn:SetScript("OnClick", function() f:Hide() end)
-
-    -- Body scroll
-    local scrollFrame = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", 16, -44)
-    scrollFrame:SetPoint("BOTTOMRIGHT", -36, 52)
-
-    local body = CreateFrame("Frame", nil, scrollFrame)
-    body:SetWidth(WIDTH - 56)
-    scrollFrame:SetScrollChild(body)
-
-    local text = body:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    text:SetPoint("TOPLEFT", 0, 0)
-    text:SetWidth(WIDTH - 56)
-    text:SetJustifyH("LEFT")
-    text:SetSpacing(3)
-    text:SetText(
-        "|cffffd100What's New in v" .. ADDON_VERSION .. "|r\n\n"
-        .. "|cff00ccffRenamed to NT_DispelSounds|r\n"
-        .. "Previously DandersFrames_DispelSounds. Now fully standalone.\n\n"
-
-        .. "|cff00ccffTwo detection modes|r\n"
-        .. "|cffffff00Dispellable by Me|r - Only alerts for debuffs your\n"
-        .. "class/spec can remove. Updates when you change specs.\n\n"
-        .. "|cffffff00All Dispellable|r - Alerts for any dispellable debuff\n"
-        .. "on any group member.\n\n"
-
-        .. "|cff00ccffCooldown awareness|r\n"
-        .. "Optional: only alert when your dispel ability is ready.\n"
-        .. "Re-alerts when the ability comes off cooldown.\n\n"
-
-        .. "|cff00ccffSettings migrated|r\n"
-        .. "Your previous settings carry over automatically.\n\n"
-
-        .. "|cff888888Use |cffffff00/dsa|cff888888 to open options. "
-        .. "Use |cffffff00/dsa changelog|cff888888 to show this again.|r"
-    )
-
-    body:SetHeight(text:GetStringHeight() + 20)
-
-    -- Bottom bar
-    local bottomBar = CreateFrame("Frame", nil, f)
-    bottomBar:SetHeight(46)
-    bottomBar:SetPoint("BOTTOMLEFT", 0, 0)
-    bottomBar:SetPoint("BOTTOMRIGHT", 0, 0)
-
-    local sep = bottomBar:CreateTexture(nil, "ARTWORK")
-    sep:SetHeight(1)
-    sep:SetPoint("TOPLEFT", 8, 0)
-    sep:SetPoint("TOPRIGHT", -8, 0)
-    sep:SetColorTexture(0.25, 0.25, 0.25, 0.8)
-
-    -- "Don't show again" checkbox
-    local cbBox = CreateFrame("Frame", nil, bottomBar, "BackdropTemplate")
-    cbBox:SetSize(16, 16)
-    cbBox:SetPoint("LEFT", 16, -2)
-    cbBox:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
-    })
-
-    local cbCheck = cbBox:CreateTexture(nil, "OVERLAY")
-    cbCheck:SetSize(12, 12)
-    cbCheck:SetPoint("CENTER")
-    cbCheck:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
-    cbCheck:Hide()
-
-    local cbLabel = bottomBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    cbLabel:SetPoint("LEFT", cbBox, "RIGHT", 6, 0)
-    cbLabel:SetText("Don't show this again")
-    cbLabel:SetTextColor(0.7, 0.7, 0.7, 1)
-
-    local dismissed = false
-
-    local function UpdateCheckVisual()
-        if dismissed then
-            cbBox:SetBackdropColor(0.3 * 1, 0.3 * 0.82, 0, 1)
-            cbBox:SetBackdropBorderColor(1, 0.82, 0, 1)
-            cbCheck:Show()
-        else
-            cbBox:SetBackdropColor(0.1, 0.1, 0.1, 1)
-            cbBox:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
-            cbCheck:Hide()
+function DSA.SwitchProfile(name)
+    if not NT_DispelSoundsDB.profiles[name] then return false end
+    NT_DispelSoundsDB.activeProfile = name
+    for k, v in pairs(DEFAULTS) do
+        if NT_DispelSoundsDB.profiles[name][k] == nil then
+            NT_DispelSoundsDB.profiles[name][k] = v
         end
     end
+    db = NT_DispelSoundsDB.profiles[name]
+    DSA.db = db
+    wipe(dispelState)
+    wipe(unitCooldowns)
+    StopAllRepeats()
+    C_Timer.After(0.5, ScanAllUnits)
+    return true
+end
 
-    local function ToggleDismiss()
-        dismissed = not dismissed
-        if dismissed then
-            db.changelogDismissed = ADDON_VERSION
-        else
-            db.changelogDismissed = nil
+function DSA.CreateProfile(name, copyFrom)
+    if not name or name == "" then return false end
+    if NT_DispelSoundsDB.profiles[name] then return false end
+    if copyFrom and NT_DispelSoundsDB.profiles[copyFrom] then
+        local copy = {}
+        for k, v in pairs(NT_DispelSoundsDB.profiles[copyFrom]) do
+            copy[k] = v
         end
-        UpdateCheckVisual()
+        NT_DispelSoundsDB.profiles[name] = copy
+    else
+        local new = {}
+        for k, v in pairs(DEFAULTS) do
+            new[k] = v
+        end
+        NT_DispelSoundsDB.profiles[name] = new
     end
+    return true
+end
 
-    cbBox:EnableMouse(true)
-    cbBox:SetScript("OnMouseUp", ToggleDismiss)
-    bottomBar:EnableMouse(true)
-    bottomBar:SetScript("OnMouseUp", function(self, button, ...)
-        local left = cbBox:GetLeft()
-        local right = cbLabel:GetRight()
-        local top = cbBox:GetTop()
-        local bottom = cbBox:GetBottom()
-        if not left then return end
-        local cx, cy = GetCursorPosition()
-        local s = UIParent:GetEffectiveScale()
-        cx, cy = cx / s, cy / s
-        if cx >= left and cx <= right + 4 and cy >= bottom - 2 and cy <= top + 2 then
-            ToggleDismiss()
-        end
-    end)
+function DSA.DeleteProfile(name)
+    if not name or name == "" then return false end
+    if name == NT_DispelSoundsDB.activeProfile then return false end
+    if not NT_DispelSoundsDB.profiles[name] then return false end
+    NT_DispelSoundsDB.profiles[name] = nil
+    return true
+end
 
-    -- Set initial state
-    dismissed = (db.changelogDismissed == ADDON_VERSION)
-    UpdateCheckVisual()
-
-    changelogFrame = f
-    f:Show()
+function DSA.RenameProfile(oldName, newName)
+    if not newName or newName == "" then return false end
+    if not NT_DispelSoundsDB.profiles[oldName] then return false end
+    if NT_DispelSoundsDB.profiles[newName] then return false end
+    NT_DispelSoundsDB.profiles[newName] = NT_DispelSoundsDB.profiles[oldName]
+    NT_DispelSoundsDB.profiles[oldName] = nil
+    if NT_DispelSoundsDB.activeProfile == oldName then
+        NT_DispelSoundsDB.activeProfile = newName
+    end
+    return true
 end
 
 -- ============================================================================
@@ -1002,7 +638,3 @@ DSA.ScanAllUnits = ScanAllUnits
 DSA.ResolveSoundFile = ResolveSoundFile
 DSA.GetLSM = GetLSM
 DSA.StopAllRepeats = StopAllRepeats
-DSA.IsDispelTypeEnabled = IsDispelTypeEnabled
-DSA.IsAnyDispelSpellReady = IsAnyDispelSpellReady
-DSA.CLASS_SPEC_DISPELS = CLASS_SPEC_DISPELS
-DSA.CLASS_SPEC_DISPEL_SPELLS = CLASS_SPEC_DISPEL_SPELLS
